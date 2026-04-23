@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Devices</h2>
+<section class="cards">
+  <div class="card"><p>Device ID</p><h3 id="deviceId">-</h3></div>
+  <div class="card"><p>Online/Offline</p><h3 id="onlineStatus">-</h3></div>
+  <div class="card"><p>Mode</p><h3 id="mode">-</h3></div>
+</section>
+<section class="card">
+  <p><strong>Last Seen:</strong> <span id="lastSeen">-</span></p>
+  <p><strong>WiFi Signal:</strong> <span id="wifiSignal">-</span></p>
+  <p><strong>API Health:</strong> <span id="apiHealth">-</span></p>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/devices.js') }}"></script>
+{% endblock %}

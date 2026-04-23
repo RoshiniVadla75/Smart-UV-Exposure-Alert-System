@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Dashboard</h2>
+<section class="cards">
+  <div class="card">
+    <p>Current UV Index</p>
+    <h3 id="uvIndexValue">-</h3>
+  </div>
+  <div class="card">
+    <p>Risk Level</p>
+    <h3 id="riskLevelValue">-</h3>
+  </div>
+  <div class="card">
+    <p>Device Status</p>
+    <h3 id="deviceStatus">-</h3>
+  </div>
+</section>
+
+<section class="card">
+  <h3>Recent Readings</h3>
+  <table>
+    <thead>
+      <tr><th>Time</th><th>UV</th><th>Risk</th><th>WiFi</th><th>Source</th></tr>
+    </thead>
+    <tbody id="recentReadingsBody"></tbody>
+  </table>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}
