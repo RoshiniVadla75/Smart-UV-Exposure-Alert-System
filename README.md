@@ -213,9 +213,3 @@ Smart-UV-Exposure-Alert-System/
 - Demo mode persists in DB (`system_state.mode`) and can auto-resume on restart.
 - Rate limiting is in-memory (suitable for single-instance deployments).
 
-## Next Production Improvements (Optional)
-
-- Move to persistent/shared rate limiting (Redis) for multi-instance deployments.
-- Add user authentication + RBAC for admin actions.
-- Add CI pipeline (lint, test, build, security checks).
-- Add HTTPS reverse proxy (Nginx) and managed secrets.
