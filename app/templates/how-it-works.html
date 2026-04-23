@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>How This System Works</h2>
+
+<section class="card info-card">
+  <p class="info-lead">
+    This page explains the real hardware-to-web data flow for the Smart UV Exposure Alert System.
+    The ESP32 reads UV sensor values and sends them securely to this Flask backend, which processes
+    and serves data to all dashboard pages.
+  </p>
+</section>
+
+<section class="pipeline">
+  <article class="pipeline-step">
+    <h3>1) UV Sensing on ESP32</h3>
+    <p>
+      The hardware station (ESP32 + UV sensor) measures UV index at regular intervals.
+      It also captures metadata like signal strength (`wifi_signal`) and timestamp.
+    </p>
+  </article>
+
+  <article class="pipeline-step">
+    <h3>2) Send Reading to Backend API</h3>
+    <p>
+      ESP32 sends an HTTP POST request to <code>/api/readings</code> with JSON data and
+      <code>X-API-Key</code> header.
+    </p>
+    <pre class="code-block">{
+  "device_id": "uv-station-01",
+  "uv_index": 4.8,
+  "wifi_signal": -62,
+  "timestamp": "2026-04-23T10:30:00Z",
+  "source": "hardware"
+}</pre>
+  </article>
+
+  <article class="pipeline-step">
+    <h3>3) Validation + Security</h3>
+    <p>
+      Backend validates payload fields, checks timestamp format, verifies API key, and applies
+      rate limiting/security headers for safer public usage.
+    </p>
+  </article>
+
+  <article class="pipeline-step">
+    <h3>4) Risk Classification + Storage</h3>
+    <p>
+      Server computes risk from UV index:
+      <strong>Low (0-2.99)</strong>, <strong>Moderate (3-5.99)</strong>, <strong>High (6+)</strong>.
+      Then it stores readings in SQLite and creates alert records for Moderate/High events.
+    </p>
+  </article>
+
+  <article class="pipeline-step">
+    <h3>5) Live UI Updates</h3>
+    <p>
+      Frontend pages poll API endpoints to render current UV, risk, history, alerts, and
+      device status. This keeps the dashboard near real-time for users.
+    </p>
+  </article>
+
+  <article class="pipeline-step">
+    <h3>6) Demo Mode (No Hardware)</h3>
+    <p>
+      If hardware is unavailable, the built-in demo engine can generate realistic sample readings
+      via <code>/api/demo/start</code> and stop via <code>/api/demo/stop</code>.
+    </p>
+  </article>
+</section>
+{% endblock %}

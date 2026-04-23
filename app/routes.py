@@ -54,6 +54,10 @@ def register_routes(app):
     def devices_page():
         return render_template("devices.html")
 
+    @app.get("/how-it-works")
+    def how_it_works_page():
+        return render_template("how-it-works.html")
+
     @app.get("/api/health")
     def health():
         return jsonify(

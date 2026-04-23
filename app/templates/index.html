@@ -26,6 +26,25 @@
     <tbody id="recentReadingsBody"></tbody>
   </table>
 </section>
+
+<section class="card info-card">
+  <h3>How Hardware Data Reaches This App</h3>
+  <p class="info-lead">
+    This system is designed for an ESP32 + UV sensor station. The hardware sends UV readings to this web app API,
+    then the backend validates, classifies risk, stores records, and updates all dashboards.
+  </p>
+  <ol class="flow-list">
+    <li><strong>Sense:</strong> UV sensor connected to ESP32 reads current UV index.</li>
+    <li><strong>Transmit:</strong> ESP32 sends JSON to <code>POST /api/readings</code> over Wi-Fi.</li>
+    <li><strong>Secure ingest:</strong> Backend checks payload format and API key.</li>
+    <li><strong>Classify:</strong> Server maps UV to risk: Low (0-2.99), Moderate (3-5.99), High (6+).</li>
+    <li><strong>Store:</strong> Reading is saved in SQLite; alerts are auto-created for Moderate/High levels.</li>
+    <li><strong>Visualize:</strong> Frontend pages poll APIs every few seconds to display live updates.</li>
+  </ol>
+  <p class="info-note">
+    If physical hardware is unavailable, use demo mode from API: <code>POST /api/demo/start</code>.
+  </p>
+</section>
 {% endblock %}
 
 {% block scripts %}
