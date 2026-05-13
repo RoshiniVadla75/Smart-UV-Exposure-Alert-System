@@ -7,12 +7,19 @@ from .services import now_iso, persist_reading
 
 
 class DemoEngine:
+    """Generate demo light sensor readings from VEML6030."""
+
     def __init__(self, app, interval_seconds=5):
         self.app = app
         self.interval_seconds = max(1, int(interval_seconds))
         self._thread = None
         self._stop_event = threading.Event()
-        self._values = itertools.cycle([1.2, 1.8, 2.5, 3.1, 4.4, 5.2, 6.7, 7.4, 5.9, 3.8, 2.1])
+        # Simulate realistic lux values throughout the day
+        self._values = itertools.cycle([
+            100, 250, 500, 800, 1200, 2000, 3500, 5000, 7500, 10000,
+            15000, 25000, 40000, 55000, 65000, 55000, 40000, 25000, 15000, 10000,
+            7500, 5000, 3500, 2000, 1200, 800, 500, 250, 100, 50
+        ])
 
     def is_running(self):
         return self._thread is not None and self._thread.is_alive()
@@ -39,8 +46,8 @@ class DemoEngine:
                     persist_reading(
                         db,
                         {
-                            "device_id": "uv-station-01",
-                            "uv_index": next(self._values),
+                            "device_id": "light-sensor-01",
+                            "lux": next(self._values),
                             "wifi_signal": -58,
                             "timestamp": now_iso(),
                             "source": "demo",

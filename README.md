@@ -1,81 +1,89 @@
-# Smart UV Exposure Alert System
+# VEML6030 Light Sensor Monitor
 
-A full-stack Flask web application for monitoring UV index readings from an IoT device (or demo simulator), classifying risk levels, storing historical data, and presenting a user-friendly dashboard for public monitoring.
+A Flask web application for monitoring illuminance readings from a VEML6030 ambient light sensor connected to an IoT device such as an ESP32. The app receives lux readings, classifies the lighting condition, stores historical data, raises alerts for extreme conditions, and presents a responsive dashboard.
 
 ## What This Project Does
 
-- Receives UV sensor readings through API ingestion.
-- Classifies each reading as `Low`, `Moderate`, or `High` risk.
-- Stores readings and alerts in SQLite.
-- Provides multi-page UI for dashboard, live stream, history, alerts, and device status.
-- Supports demo mode with automatic background reading generation.
-- Includes public-use baseline hardening: API key protection, rate limiting, security headers, tests, and Docker.
+- Receives VEML6030 light readings through Bluetooth or API ingestion.
+- Uses `lux` as the primary measurement unit.
+- Classifies each reading as `Too Dark`, `Dim`, `Ideal`, `Bright`, or `Very Bright`.
+- Stores readings and threshold events in SQLite.
+- Provides one focused dashboard page.
+- Pulls location-based solar radiation data only to compare live hardware lux with expected outdoor light.
+- Supports demo mode with automatic synthetic light readings.
+- Includes API key protection, basic rate limiting, security headers, tests, and Docker support.
 
 ## Tech Stack
 
-- **Backend:** Python, Flask, SQLite
-- **Frontend:** Jinja2 templates, vanilla JavaScript, custom CSS
-- **Testing:** Pytest
-- **Deployment:** Gunicorn + Docker
+- Backend: Python, Flask, SQLite
+- Frontend: Jinja2 templates, vanilla JavaScript, custom CSS
+- Testing: Pytest
+- Deployment: Gunicorn + Docker
 
-## Features
+## Light Level Rules
 
-### Frontend
+| Lux range | Level | Alert |
+| --- | --- | --- |
+| `< 50` | Too Dark | Yes |
+| `50 - 499` | Dim | No |
+| `500 - 4,999` | Ideal | No |
+| `5,000 - 49,999` | Bright | No |
+| `>= 50,000` | Very Bright | Yes |
 
-- Interactive modern UI with responsive layout and hover/focus states.
-- Pages:
-  - Dashboard (`/`)
-  - Live Data (`/live-data`)
-  - History (`/history`)
-  - Alerts (`/alerts`)
-  - Devices (`/devices`)
+The ingest API accepts lux values from `0` to `188000`, matching the configured VEML6030 operating range used by this app.
 
-### Backend API
+## Pages
+
+- Dashboard: `/`
+
+The dashboard is the single app page. Legacy page URLs redirect back to `/`.
+
+The dashboard includes live lux, thresholds, buzzer state, OLED display preview, Bluetooth hardware status, exact location, recent readings, and a trend chart comparing VEML6030 lux with the location-based outdoor light estimate.
+
+## Weather Comparison
+
+Weather data is fetched through the Flask backend using Open-Meteo. The dashboard only uses solar radiation/daylight information for the light comparison; it does not display general weather metrics.
+
+The comparison card estimates outdoor lux from weather-provided solar radiation when available. The live VEML6030 reading is then compared with the estimate to show whether the hardware is close, shaded/low, or brighter than expected.
+
+## Backend API
 
 - `GET /api/health`
-- `POST /api/readings` (protected with `X-API-Key` when configured)
+- `POST /api/readings` protected with `X-API-Key` when configured
 - `GET /api/readings/latest`
 - `GET /api/readings/recent?limit=20`
 - `GET /api/readings/history?from=<iso>&to=<iso>`
 - `GET /api/alerts`
 - `GET /api/summary/today`
+- `GET /api/weather?location=Perth, Australia`
 - `GET /api/device-status`
+- `GET /api/system/status`
 - `POST /api/demo/start`
 - `POST /api/demo/stop`
 - `GET /api/demo/status`
 
-### Security and Reliability
+## Quick Start
 
-- API key check on ingestion endpoint (`X-API-Key`).
-- Basic per-IP rate limiting for API endpoints.
-- Security headers: CSP, no-sniff, frame deny, referrer policy, permissions policy.
-- Centralized timestamp parsing and validation.
-- Background demo engine for synthetic readings.
-
-## Quick Start (Bash)
-
-### 1) Create and activate virtual environment
+Create and activate a virtual environment:
 
 ```bash
 python -m venv .venv
 source .venv/Scripts/activate
 ```
 
-If you are on Linux/macOS, use:
+On Linux or macOS:
 
 ```bash
 source .venv/bin/activate
 ```
 
-### 2) Install dependencies
+Install dependencies:
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-### 3) Configure environment
-
-Create a local `.env` file (copy from `.env.example`) and set values:
+Create a local `.env` file from `.env.example` and set values:
 
 ```env
 PORT=5000
@@ -84,9 +92,11 @@ INGEST_API_KEY=change-this-secret-key
 DEMO_INTERVAL_SECONDS=5
 RATE_LIMIT_WINDOW_SECONDS=60
 RATE_LIMIT_MAX_REQUESTS=120
+DEFAULT_WEATHER_LOCATION=Perth, Australia
+WEATHER_API_TIMEOUT_SECONDS=4
 ```
 
-### 4) Run the app
+Run the app:
 
 ```bash
 export PORT=5000
@@ -94,54 +104,85 @@ export INGEST_API_KEY="change-this-secret-key"
 python run.py
 ```
 
-Open in browser:
+Open `http://localhost:5000/`.
 
-- `http://localhost:5000/`
-- `http://localhost:5000/live-data`
-- `http://localhost:5000/history`
-- `http://localhost:5000/alerts`
-- `http://localhost:5000/devices`
+## Bluetooth Hardware Setup
 
-## Testing the App
+For the portable hardware setup, use Bluetooth Low Energy from the ESP32 to the browser. The browser acts as the local gateway: it connects to the ESP32 over BLE, receives VEML6030 lux packets, and forwards them to `POST /api/readings` so the dashboard, charts, alerts, and weather comparison update together.
 
-### Automated tests
+Bluetooth is best for this version when the device is portable and the dashboard laptop/phone is nearby. Wi-Fi plus HTTP is better for unattended remote logging, but it requires network setup on the hardware. Classic Bluetooth serial can work, but browser support is poorer than BLE.
 
-```bash
-python -m pytest -q
+Recommended BLE profile:
+
+| Item | Value |
+| --- | --- |
+| Device name prefix | `VEML`, `Light`, or `ESP32` |
+| Service | Nordic UART Service |
+| Service UUID | `6e400001-b5a3-f393-e0a9-e50e24dcca9e` |
+| Notify characteristic | `6e400003-b5a3-f393-e0a9-e50e24dcca9e` |
+
+The ESP32 should notify one newline-delimited packet every few seconds. Supported packet formats:
+
+```json
+{"device_id":"light-sensor-01","lux":850.5,"wifi_signal":-62}
 ```
 
-Current suite validates:
+```text
+device_id=light-sensor-01,lux=850.5,wifi_signal=-62
+```
 
-- health endpoint response
-- secure ingestion behavior (authorized/unauthorized)
-- risk classification persistence
-- input validation (`limit`)
-- demo mode status/toggle flow
+```text
+light-sensor-01,850.5,-62
+```
 
-### Manual smoke test (API)
+Open the dashboard in Chrome or Edge on `localhost`, enter the ingest key if `INGEST_API_KEY` is configured, and press `Connect Bluetooth`. Web Bluetooth requires a secure context, and `localhost` is accepted for local development.
 
-#### Health
+## API Hardware Payload
+
+Bluetooth is the preferred path for the portable setup. You can still send readings from another controller or script to:
+
+```text
+POST /api/readings
+```
+
+Example JSON payload:
+
+```json
+{
+  "device_id": "light-sensor-01",
+  "lux": 850.5,
+  "wifi_signal": -62,
+  "timestamp": "2026-05-13T10:30:00Z",
+  "source": "hardware"
+}
+```
+
+`timestamp` is optional. If omitted, the server stores the current UTC time.
+
+## Manual Smoke Test
+
+Health:
 
 ```bash
 curl -s http://localhost:5000/api/health
 ```
 
-#### Ingest one reading
+Ingest one reading:
 
 ```bash
 curl -s -X POST http://localhost:5000/api/readings \
   -H "Content-Type: application/json" \
   -H "X-API-Key: change-this-secret-key" \
-  -d '{"device_id":"uv-station-01","uv_index":5.2,"wifi_signal":-61,"source":"hardware"}'
+  -d '{"device_id":"light-sensor-01","lux":850.5,"wifi_signal":-61,"source":"hardware"}'
 ```
 
-#### Check latest reading
+Check latest reading:
 
 ```bash
 curl -s http://localhost:5000/api/readings/latest
 ```
 
-#### Toggle demo mode
+Toggle demo mode:
 
 ```bash
 curl -s -X POST http://localhost:5000/api/demo/start
@@ -149,12 +190,20 @@ curl -s http://localhost:5000/api/demo/status
 curl -s -X POST http://localhost:5000/api/demo/stop
 ```
 
+## Testing
+
+```bash
+python -m pytest -q
+```
+
+The test suite validates health checks, protected ingestion, lux persistence, light-level classification, alert creation, invalid lux rejection, demo mode toggling, and VEML6030 status metadata.
+
 ## Run with Docker
 
 Build image:
 
 ```bash
-docker build -t smart-uv-app .
+docker build -t veml6030-light-app .
 ```
 
 Run container:
@@ -166,50 +215,40 @@ docker run --rm -p 5000:5000 \
   -e DEMO_INTERVAL_SECONDS=5 \
   -e RATE_LIMIT_WINDOW_SECONDS=60 \
   -e RATE_LIMIT_MAX_REQUESTS=120 \
-  smart-uv-app
+  veml6030-light-app
 ```
 
 ## Project Structure
 
 ```text
-Smart-UV-Exposure-Alert-System/
-├── app/
-│   ├── __init__.py            # app factory, security headers, rate limiting, startup behavior
-│   ├── db.py                  # SQLite connection + schema initialization
-│   ├── demo.py                # background demo reading generator
-│   ├── routes.py              # HTML routes + REST API routes
-│   ├── services.py            # risk logic, timestamp parsing, reading persistence
-│   ├── static/
-│   │   ├── css/
-│   │   │   └── styles.css     # interactive styling
-│   │   └── js/
-│   │       ├── main.js
-│   │       ├── dashboard.js
-│   │       ├── live-data.js
-│   │       ├── history.js
-│   │       ├── alerts.js
-│   │       └── devices.js
-│   └── templates/
-│       ├── base.html
-│       ├── index.html
-│       ├── live-data.html
-│       ├── history.html
-│       ├── alerts.html
-│       └── devices.html
-├── tests/
-│   └── test_app.py            # pytest API tests
-├── .env.example               # environment variable template
-├── .gitignore
-├── Dockerfile
-├── requirements.txt
-├── run.py                     # app entrypoint
-└── README.md
+VEML6030-Light-Sensor-Monitor/
+|-- app/
+|   |-- __init__.py            # app factory, security headers, rate limiting
+|   |-- db.py                  # SQLite connection and schema initialization
+|   |-- demo.py                # background demo lux generator
+|   |-- routes.py              # HTML routes and REST API routes
+|   |-- services.py            # light-level logic, timestamp parsing, persistence
+|   |-- static/
+|   |   |-- css/
+|   |   |   `-- styles.css
+|   |   `-- js/
+|   |       |-- main.js
+|   |       |-- dashboard.js
+|   `-- templates/
+|       |-- base.html
+|       `-- index.html
+|-- tests/
+|   `-- test_app.py
+|-- .env.example
+|-- Dockerfile
+|-- requirements.txt
+|-- run.py
+`-- README.md
 ```
 
 ## Operational Notes
 
 - `POST /api/readings` requires `X-API-Key` when `INGEST_API_KEY` is set.
-- App stores data in `instance/uv_system.db`.
-- Demo mode persists in DB (`system_state.mode`) and can auto-resume on restart.
-- Rate limiting is in-memory (suitable for single-instance deployments).
-
+- App stores data in `instance/light_system.db` by default.
+- Demo mode persists in `system_state.mode` and can auto-resume on restart.
+- Rate limiting is in-memory and suited for a single app instance.

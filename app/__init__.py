@@ -12,11 +12,13 @@ from .routes import register_routes
 def create_app(test_config=None):
     app = Flask(__name__)
     app.config.from_mapping(
-        DATABASE=os.path.join(app.instance_path, "uv_system.db"),
+        DATABASE=os.path.join(app.instance_path, "light_system.db"),
         INGEST_API_KEY=os.getenv("INGEST_API_KEY", ""),
         DEMO_INTERVAL_SECONDS=int(os.getenv("DEMO_INTERVAL_SECONDS", "5")),
         RATE_LIMIT_WINDOW_SECONDS=int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")),
         RATE_LIMIT_MAX_REQUESTS=int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "120")),
+        DEFAULT_WEATHER_LOCATION=os.getenv("DEFAULT_WEATHER_LOCATION", "Perth, Australia"),
+        WEATHER_API_TIMEOUT_SECONDS=float(os.getenv("WEATHER_API_TIMEOUT_SECONDS", "4")),
     )
 
     if test_config:
@@ -59,7 +61,9 @@ def create_app(test_config=None):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        response.headers["Permissions-Policy"] = (
+            "bluetooth=(self), geolocation=(self), microphone=(), camera=()"
+        )
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "script-src 'self'; "

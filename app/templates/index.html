@@ -1,49 +1,137 @@
 {% extends "base.html" %}
 
+{% block body_class %}dashboard-page{% endblock %}
+
 {% block content %}
-<h2>Dashboard</h2>
-<section class="cards">
-  <div class="card">
-    <p>Current UV Index</p>
-    <h3 id="uvIndexValue">-</h3>
-  </div>
-  <div class="card">
-    <p>Risk Level</p>
-    <h3 id="riskLevelValue">-</h3>
-  </div>
-  <div class="card">
-    <p>Device Status</p>
-    <h3 id="deviceStatus">-</h3>
-  </div>
-</section>
+<section class="light-dashboard">
+  <header class="light-hero">
+    <div>
+      <p class="eyebrow">VEML6030 portable hardware monitor</p>
+      <h1>Light Sensor Dashboard</h1>
+      <p class="hero-copy">
+        Live Bluetooth lux readings, threshold decisions, buzzer state, OLED output, and location-based outdoor light comparison.
+      </p>
+    </div>
+    <div class="hero-controls">
+      <button id="refreshDashboardBtn" type="button">Refresh</button>
+      <button id="useLocationBtn" type="button">Use Current Location</button>
+      <input id="locationSearch" type="search" placeholder="Location, e.g. Perth WA" autocomplete="off" />
+    </div>
+  </header>
 
-<section class="card">
-  <h3>Recent Readings</h3>
-  <table>
-    <thead>
-      <tr><th>Time</th><th>UV</th><th>Risk</th><th>WiFi</th><th>Source</th></tr>
-    </thead>
-    <tbody id="recentReadingsBody"></tbody>
-  </table>
-</section>
+  <section class="status-grid">
+    <article class="sensor-card primary-sensor">
+      <p class="card-label">Current VEML6030 Reading</p>
+      <div class="lux-display">
+        <strong id="luxValue">--</strong>
+        <span>lux</span>
+      </div>
+      <div id="lightLevelValue" class="level-pill">No reading</div>
+      <p id="lightAdvice" class="soft-text">Connect Bluetooth or start demo mode to receive sensor data.</p>
+    </article>
 
-<section class="card info-card">
-  <h3>How Hardware Data Reaches This App</h3>
-  <p class="info-lead">
-    This system is designed for an ESP32 + UV sensor station. The hardware sends UV readings to this web app API,
-    then the backend validates, classifies risk, stores records, and updates all dashboards.
-  </p>
-  <ol class="flow-list">
-    <li><strong>Sense:</strong> UV sensor connected to ESP32 reads current UV index.</li>
-    <li><strong>Transmit:</strong> ESP32 sends JSON to <code>POST /api/readings</code> over Wi-Fi.</li>
-    <li><strong>Secure ingest:</strong> Backend checks payload format and API key.</li>
-    <li><strong>Classify:</strong> Server maps UV to risk: Low (0-2.99), Moderate (3-5.99), High (6+).</li>
-    <li><strong>Store:</strong> Reading is saved in SQLite; alerts are auto-created for Moderate/High levels.</li>
-    <li><strong>Visualize:</strong> Frontend pages poll APIs every few seconds to display live updates.</li>
-  </ol>
-  <p class="info-note">
-    If physical hardware is unavailable, use demo mode from API: <code>POST /api/demo/start</code>.
-  </p>
+    <article class="sensor-card">
+      <p class="card-label">Threshold</p>
+      <h2 id="thresholdStatus">Waiting</h2>
+      <p id="thresholdRange" class="soft-text">Safe range: 50-50000 lux</p>
+      <div class="threshold-meter">
+        <span class="low-zone"></span>
+        <span class="safe-zone"></span>
+        <span class="high-zone"></span>
+        <i id="thresholdMarker"></i>
+      </div>
+    </article>
+
+    <article class="sensor-card">
+      <p class="card-label">Buzzer</p>
+      <h2 id="buzzerState">OFF</h2>
+      <p id="buzzerReason" class="soft-text">Buzzer turns on when lux is below or above threshold.</p>
+      <div id="buzzerIndicator" class="buzzer-indicator off">Buzzer OFF</div>
+    </article>
+
+    <article class="sensor-card oled-card">
+      <p class="card-label">OLED Display Preview</p>
+      <pre id="oledPreview">VEML6030
+Waiting for data...</pre>
+    </article>
+  </section>
+
+  <section class="connection-card">
+    <div>
+      <p class="card-label">Bluetooth Hardware</p>
+      <h2>ESP32 BLE Receiver</h2>
+      <p class="soft-text">
+        The browser connects to the portable ESP32 over BLE, receives VEML6030 lux packets, then saves them into this dashboard.
+      </p>
+    </div>
+    <div class="connection-actions">
+      <span id="bluetoothStatus" class="status-pill">disconnected</span>
+      <input id="ingestKeyInput" type="password" placeholder="Ingest API key" autocomplete="off" />
+      <button id="connectBluetoothBtn" type="button">Connect Bluetooth</button>
+      <button id="disconnectBluetoothBtn" type="button">Disconnect</button>
+    </div>
+    <p id="bluetoothPacket" class="packet-text">Last packet: none</p>
+  </section>
+
+  <section class="comparison-strip">
+    <article>
+      <p class="card-label">Hardware Location</p>
+      <h3 id="hardwareLocation">Unknown location</h3>
+      <p id="hardwareCoordinates" class="soft-text">No coordinates received yet.</p>
+    </article>
+    <article>
+      <p class="card-label">Outdoor Light Estimate</p>
+      <h3 id="weatherLuxCompare">-- lux</h3>
+      <p id="weatherBasisCompare" class="soft-text">Uses solar radiation for the selected location only.</p>
+    </article>
+    <article>
+      <p class="card-label">Sensor Difference</p>
+      <h3 id="luxDifferenceCompare">-- lux</h3>
+      <p id="comparisonStatus" class="soft-text">Waiting for sensor and location data.</p>
+    </article>
+  </section>
+
+  <section class="trend-panel">
+    <div class="trend-header">
+      <div>
+        <p class="eyebrow">Light trends</p>
+        <h2>Hardware Lux vs Location Estimate</h2>
+      </div>
+      <div class="trend-filters" aria-label="Chart legend">
+        <span><i class="legend-sensor"></i>VEML6030 lux</span>
+        <span><i class="legend-weather"></i>Outdoor estimated lux</span>
+        <span><i class="legend-low"></i>Low threshold</span>
+        <span><i class="legend-high"></i>High threshold</span>
+      </div>
+    </div>
+    <canvas id="lightTrendChart" width="1200" height="540"></canvas>
+  </section>
+
+  <section class="records-panel">
+    <div class="trend-header">
+      <div>
+        <p class="eyebrow">Recent readings</p>
+        <h2>Sensor, Threshold, Buzzer, OLED</h2>
+      </div>
+      <span id="deviceStatus" class="status-pill">offline</span>
+    </div>
+    <div class="table-scroll">
+      <table class="light-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Lux</th>
+            <th>Level</th>
+            <th>Threshold</th>
+            <th>Buzzer</th>
+            <th>OLED</th>
+            <th>Location</th>
+          </tr>
+        </thead>
+        <tbody id="recentReadingsBody"></tbody>
+      </table>
+    </div>
+  </section>
 </section>
 {% endblock %}
 

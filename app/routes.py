@@ -1,9 +1,16 @@
 from datetime import datetime, timedelta, timezone
 
-from flask import current_app, jsonify, render_template, request
+from flask import current_app, jsonify, redirect, render_template, request, url_for
 
 from .db import get_db
-from .services import now_iso, parse_iso_timestamp, persist_reading
+from .services import (
+    HIGH_LIGHT_THRESHOLD_LUX,
+    LOW_LIGHT_THRESHOLD_LUX,
+    now_iso,
+    parse_iso_timestamp,
+    persist_reading,
+)
+from .weather import fetch_weather_summary
 
 
 def _validate_payload(payload):
@@ -11,13 +18,32 @@ def _validate_payload(payload):
         return "Payload must be a JSON object."
     if not payload.get("device_id") or not isinstance(payload.get("device_id"), str):
         return "device_id is required and must be a string."
-    uv = payload.get("uv_index")
+    lux = payload.get("lux")
     try:
-        uv = float(uv)
+        lux = float(lux)
     except (TypeError, ValueError):
-        return "uv_index is required and must be a number."
-    if uv < 0 or uv > 15:
-        return "uv_index must be between 0 and 15."
+        return "lux is required and must be a number."
+    if lux < 0 or lux > 188000:
+        return "lux must be between 0 and 188000 (VEML6030 range)."
+    latitude = payload.get("latitude")
+    if latitude not in (None, ""):
+        try:
+            latitude = float(latitude)
+        except (TypeError, ValueError):
+            return "latitude must be a number when provided."
+        if latitude < -90 or latitude > 90:
+            return "latitude must be between -90 and 90."
+    longitude = payload.get("longitude")
+    if longitude not in (None, ""):
+        try:
+            longitude = float(longitude)
+        except (TypeError, ValueError):
+            return "longitude must be a number when provided."
+        if longitude < -180 or longitude > 180:
+            return "longitude must be between -180 and 180."
+    location_label = payload.get("location_label")
+    if location_label is not None and not isinstance(location_label, str):
+        return "location_label must be a string when provided."
     wifi = payload.get("wifi_signal")
     if wifi is not None:
         try:
@@ -40,23 +66,19 @@ def register_routes(app):
 
     @app.get("/live-data")
     def live_data_page():
-        return render_template("live-data.html")
+        return redirect(url_for("dashboard_page"))
 
     @app.get("/history")
     def history_page():
-        return render_template("history.html")
+        return redirect(url_for("dashboard_page"))
 
     @app.get("/alerts")
     def alerts_page():
-        return render_template("alerts.html")
+        return redirect(url_for("dashboard_page"))
 
     @app.get("/devices")
     def devices_page():
-        return render_template("devices.html")
-
-    @app.get("/how-it-works")
-    def how_it_works_page():
-        return render_template("how-it-works.html")
+        return redirect(url_for("dashboard_page"))
 
     @app.get("/api/health")
     def health():
@@ -152,7 +174,7 @@ def register_routes(app):
         db = get_db()
         summary = db.execute(
             """
-            SELECT ROUND(AVG(uv_index), 2) AS avg_uv, MAX(uv_index) AS max_uv
+            SELECT ROUND(AVG(lux), 2) AS avg_lux, MAX(lux) AS max_lux, MIN(lux) AS min_lux
             FROM readings
             WHERE timestamp >= ?
             """,
@@ -164,11 +186,36 @@ def register_routes(app):
         ).fetchone()
         return jsonify(
             {
-                "avg_uv": summary["avg_uv"],
-                "max_uv": summary["max_uv"],
+                "avg_lux": summary["avg_lux"],
+                "max_lux": summary["max_lux"],
+                "min_lux": summary["min_lux"],
                 "alert_count": alert_row["alert_count"],
             }
         )
+
+    @app.get("/api/weather")
+    def get_weather():
+        latitude = request.args.get("latitude", type=float)
+        longitude = request.args.get("longitude", type=float)
+        if (latitude is None) != (longitude is None):
+            return jsonify({"error": "latitude and longitude must be provided together."}), 400
+
+        location = (
+            request.args.get("location")
+            or current_app.config.get("DEFAULT_WEATHER_LOCATION")
+            or "Perth, Australia"
+        ).strip()
+        try:
+            return jsonify(
+                fetch_weather_summary(
+                    location,
+                    timeout=current_app.config.get("WEATHER_API_TIMEOUT_SECONDS", 4),
+                    latitude=latitude,
+                    longitude=longitude,
+                )
+            )
+        except ValueError as err:
+            return jsonify({"error": str(err)}), 404
 
     @app.get("/api/device-status")
     def device_status():
@@ -212,5 +259,53 @@ def register_routes(app):
             {
                 "mode": state["mode"] if state else "hardware",
                 "active": current_app.extensions["demo_engine"].is_running(),
+            }
+        )
+
+    @app.get("/api/system/status")
+    def system_status():
+        """Get system status for VEML6030 light sensor."""
+        db = get_db()
+
+        # Get latest reading
+        latest = db.execute(
+            "SELECT * FROM readings ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+
+        # Get current mode
+        state = db.execute(
+            "SELECT device_id, latest_wifi_signal, mode FROM system_state WHERE id = 1"
+        ).fetchone()
+        current_mode = state["mode"] if state else "hardware"
+
+        # Check demo engine status
+        demo_running = current_app.extensions["demo_engine"].is_running()
+
+        return jsonify(
+            {
+                "sensor_info": {
+                    "sensor": "VEML6030",
+                    "sensor_type": "Ambient Light Sensor",
+                    "measurement": "Illuminance (lux)",
+                    "range": "0-188000 lux",
+                },
+                "system_info": {
+                    "current_mode": current_mode,
+                    "demo_engine_active": demo_running,
+                    "device_id": state["device_id"] if state else "light-sensor-01",
+                },
+                "latest_reading": dict(latest) if latest else None,
+                "light_levels": {
+                    "too_dark": f"< {LOW_LIGHT_THRESHOLD_LUX} lux",
+                    "dim": "50-500 lux",
+                    "ideal": "500-5000 lux",
+                    "bright": f"5000-{HIGH_LIGHT_THRESHOLD_LUX} lux",
+                    "very_bright": f">= {HIGH_LIGHT_THRESHOLD_LUX} lux",
+                },
+                "thresholds": {
+                    "low_lux": LOW_LIGHT_THRESHOLD_LUX,
+                    "high_lux": HIGH_LIGHT_THRESHOLD_LUX,
+                    "buzzer_on_when": ["Below Threshold", "Above Threshold"],
+                },
             }
         )
