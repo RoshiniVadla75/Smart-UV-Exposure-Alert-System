@@ -29,6 +29,32 @@ def test_health(client):
     assert "bluetooth=(self)" in response.headers["Permissions-Policy"]
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/",
+        "/live-data",
+        "/history",
+        "/weather-comparison",
+        "/alerts",
+        "/devices",
+        "/settings",
+        "/how-it-works",
+        "/about",
+    ],
+)
+def test_new_page_routes_render(client, path):
+    response = client.get(path)
+    assert response.status_code == 200
+    assert b"SMART UV EXPOSURE ALERT SYSTEM" in response.data
+
+
+@pytest.mark.parametrize("path", ["/api/current", "/api/readings/history"])
+def test_legacy_api_aliases_are_removed(client, path):
+    response = client.get(path)
+    assert response.status_code == 404
+
+
 def test_post_and_get_latest_reading(client):
     unauthorized = client.post(
         "/api/readings",
@@ -127,18 +153,23 @@ def test_system_status_reports_veml6030(client):
 
 
 def test_weather_route_uses_configured_adapter(client, monkeypatch):
-    def fake_weather(location, timeout, latitude=None, longitude=None):
+    def fake_weather(location, timeout, latitude=None, longitude=None, api_key=None):
         return {
             "source": "test",
+            "source_label": "Live weather",
             "status": "ok",
             "location": {"label": location, "latitude": latitude, "longitude": longitude},
             "current": {
                 "temperature_c": 22,
+                "humidity_percent": 50,
+                "wind_speed_kmh": 18,
                 "cloud_cover_percent": 30,
-                "shortwave_radiation_w_m2": 500,
+                "uv_index": 6,
+                "condition": "Clear Sky",
             },
-            "daily": {},
+            "daily": {"sunrise": "06:00", "sunset": "18:00"},
             "hourly": [],
+            "forecast": [],
             "timeout": timeout,
         }
 
@@ -147,7 +178,9 @@ def test_weather_route_uses_configured_adapter(client, monkeypatch):
     assert response.status_code == 200
     data = response.get_json()
     assert data["location"]["label"] == "Perth"
-    assert data["current"]["shortwave_radiation_w_m2"] == 500
+    assert data["source_label"] == "Live weather"
+    assert data["current"]["temperature_c"] == 22
+    assert data["current"]["uv_index"] == 6
 
 
 def test_reading_accepts_location_metadata(client):

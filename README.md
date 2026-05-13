@@ -1,4 +1,4 @@
-# VEML6030 Light Sensor Monitor
+# Smart UV Exposure Alert System
 
 A Flask web application for monitoring illuminance readings from a VEML6030 ambient light sensor connected to an IoT device such as an ESP32. The app receives lux readings, classifies the lighting condition, stores historical data, raises alerts for extreme conditions, and presents a responsive dashboard.
 
@@ -9,7 +9,7 @@ A Flask web application for monitoring illuminance readings from a VEML6030 ambi
 - Classifies each reading as `Too Dark`, `Dim`, `Ideal`, `Bright`, or `Very Bright`.
 - Stores readings and threshold events in SQLite.
 - Provides one focused dashboard page.
-- Pulls location-based solar radiation data only to compare live hardware lux with expected outdoor light.
+- Pulls live Perth weather data for temperature, condition, humidity, wind, cloud cover, UV, sunrise, sunset, and forecast cards.
 - Supports demo mode with automatic synthetic light readings.
 - Includes API key protection, basic rate limiting, security headers, tests, and Docker support.
 
@@ -36,15 +36,21 @@ The ingest API accepts lux values from `0` to `188000`, matching the configured 
 
 - Dashboard: `/`
 
-The dashboard is the single app page. Legacy page URLs redirect back to `/`.
+The dashboard uses separate pages for dashboard, live data, history, weather comparison, alerts, devices, settings, how it works, and project information.
 
 The dashboard includes live lux, thresholds, buzzer state, OLED display preview, Bluetooth hardware status, exact location, recent readings, and a trend chart comparing VEML6030 lux with the location-based outdoor light estimate.
 
 ## Weather Comparison
 
-Weather data is fetched through the Flask backend using Open-Meteo. The dashboard only uses solar radiation/daylight information for the light comparison; it does not display general weather metrics.
+Weather data is fetched through the Flask backend. If `WEATHER_API_KEY` is set, the app uses WeatherAPI. Without a key, it uses Open-Meteo for live Perth weather. The dashboard must not display hardcoded weather values as if they are live.
 
-The comparison card estimates outdoor lux from weather-provided solar radiation when available. The live VEML6030 reading is then compared with the estimate to show whether the hardware is close, shaded/low, or brighter than expected.
+The comparison card combines live weather UV, daylight, cloud cover, and VEML6030 lux. If weather is unavailable, the UI says `Weather unavailable` instead of showing fake values.
+
+To enable real weather with your own provider key:
+
+1. Create `.env` in the project root.
+2. Add `WEATHER_API_KEY=your_key_here`.
+3. Restart the Flask app with `python run.py`.
 
 ## Backend API
 
@@ -52,7 +58,7 @@ The comparison card estimates outdoor lux from weather-provided solar radiation 
 - `POST /api/readings` protected with `X-API-Key` when configured
 - `GET /api/readings/latest`
 - `GET /api/readings/recent?limit=20`
-- `GET /api/readings/history?from=<iso>&to=<iso>`
+- `GET /api/history?from=<iso>&to=<iso>`
 - `GET /api/alerts`
 - `GET /api/summary/today`
 - `GET /api/weather?location=Perth, Australia`
@@ -93,6 +99,7 @@ DEMO_INTERVAL_SECONDS=5
 RATE_LIMIT_WINDOW_SECONDS=60
 RATE_LIMIT_MAX_REQUESTS=120
 DEFAULT_WEATHER_LOCATION=Perth, Australia
+WEATHER_API_KEY=your_key_here
 WEATHER_API_TIMEOUT_SECONDS=4
 ```
 

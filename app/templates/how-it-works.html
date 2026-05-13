@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">How It Works</p>
+    <h1>From local lux readings to estimated UV risk</h1>
+    <p>The VEML6030 measures lux, not UV. Weather UV and daylight conditions provide external context for estimating local exposure risk.</p>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>System Flow</h2>
+  <div class="flow-list">
+    <div>VEML6030 lux reading</div>
+    <div>ESP32 processing</div>
+    <div>Estimated UV calculation</div>
+    <div>OLED + LED + buzzer output</div>
+    <div>Bluetooth data transmission</div>
+    <div>Dashboard update</div>
+    <div>Weather comparison</div>
+    <div>Recommendations</div>
+  </div>
+</section>
+
+<section class="card-grid">
+  <article class="panel">
+    <h2>Local Sensor</h2>
+    <p class="info-copy">The VEML6030 provides real local ambient brightness in lux, which helps detect shading, obstruction, brightness changes, and lighting conditions.</p>
+  </article>
+  <article class="panel">
+    <h2>Weather Context</h2>
+    <p class="info-copy">The Flask backend can use weather UV, cloud cover, sunrise, sunset, and weather condition data to understand the expected environmental risk.</p>
+  </article>
+  <article class="panel">
+    <h2>Alerts</h2>
+    <p class="info-copy">The ESP32 OLED, LEDs, and buzzer provide local feedback while the dashboard stores readings and displays trends.</p>
+  </article>
+</section>
+{% endblock %}

@@ -1,140 +1,207 @@
 {% extends "base.html" %}
 
-{% block body_class %}dashboard-page{% endblock %}
-
 {% block content %}
-<section class="light-dashboard">
-  <header class="light-hero">
-    <div>
-      <p class="eyebrow">VEML6030 portable hardware monitor</p>
-      <h1>Light Sensor Dashboard</h1>
-      <p class="hero-copy">
-        Live Bluetooth lux readings, threshold decisions, buzzer state, OLED output, and location-based outdoor light comparison.
-      </p>
+<section class="page-header dashboard-header">
+  <div>
+    <p class="eyebrow">Dashboard</p>
+    <h1>Real-time UV monitoring and environmental analysis</h1>
+    <p>
+      Estimated UV risk is calculated from VEML6030 local brightness in lux,
+      weather UV, daylight status, cloud cover, and current weather conditions.
+    </p>
+  </div>
+  <div class="header-cards">
+    <button id="connectBluetoothBtn" type="button">
+      Connect Bluetooth
+    </button>
+    <article class="glass-tile bluetooth-tile">
+      <span class="bluetooth-mark" aria-hidden="true">B</span>
+      <div>
+        <p>Bluetooth</p>
+        <strong id="heroBluetoothLabel">Connected</strong>
+      </div>
+      <i id="signalPulse"></i>
+    </article>
+    <article class="glass-tile clock-tile">
+      <strong id="clockValue">10:30 AM</strong>
+      <span id="dateValue">May 24, 2026</span>
+    </article>
+  </div>
+</section>
+
+<section class="hero-grid">
+  <article class="hero-weather-card hero-sunny" id="heroPanel">
+    <div class="hero-overlay"></div>
+    <div class="weather-summary">
+      <p class="location-line" id="locationLabel">Perth, Australia</p>
+      <div class="temperature-row">
+        <span class="weather-orb sunny" id="weatherOrb" aria-hidden="true"></span>
+        <strong id="temperatureLabel">Loading weather...</strong>
+      </div>
+      <p class="condition-line" id="conditionLabel">Loading weather...</p>
+      <div class="mini-weather-grid">
+        <div><span>Humidity</span><strong id="humidityLabel">--</strong></div>
+        <div><span>Wind</span><strong id="windLabel">--</strong></div>
+        <div><span>Cloud Cover</span><strong id="cloudCoverLabel">--</strong></div>
+        <div><span>Sunrise</span><strong id="sunriseLabel">--</strong></div>
+        <div><span>Sunset</span><strong id="sunsetLabel">--</strong></div>
+        <div><span>Source</span><strong id="weatherSourceLabel">Weather unavailable</strong></div>
+      </div>
     </div>
-    <div class="hero-controls">
-      <button id="refreshDashboardBtn" type="button">Refresh</button>
-      <button id="useLocationBtn" type="button">Use Current Location</button>
-      <input id="locationSearch" type="search" placeholder="Location, e.g. Perth WA" autocomplete="off" />
+  </article>
+
+  <article class="glass-card gauge-card">
+    <p>Estimated UV Index</p>
+    <div class="uv-gauge" id="estimatedGauge">
+      <span class="needle" id="estimatedNeedle"></span>
+      <div class="gauge-core">
+        <strong id="estimated-uv-value">4</strong>
+      </div>
+    </div>
+    <h2 id="estimatedRiskLabel">Moderate</h2>
+    <span id="estimatedGaugeMessage">Estimated from local brightness, daylight, cloud cover, and weather UV.</span>
+  </article>
+
+  <article class="glass-card gauge-card">
+    <p>Weather UV Index</p>
+    <div class="uv-gauge" id="weatherGauge">
+      <span class="needle" id="weatherNeedle"></span>
+      <div class="gauge-core">
+        <strong id="weatherUvValue">--</strong>
+      </div>
+    </div>
+    <h2 id="weatherRiskLabel">Weather unavailable</h2>
+    <span id="weatherApiNote">Waiting for live weather</span>
+  </article>
+</section>
+
+<section class="stat-grid">
+  <article class="stat-card">
+    <span class="stat-kicker">Local Brightness</span>
+    <strong id="lux-value">12,450 lux</strong>
+    <small id="luxBandLabel">High brightness</small>
+  </article>
+  <article class="stat-card">
+    <span class="stat-kicker">Estimated UV Risk</span>
+    <strong id="risk-value">Moderate</strong>
+    <small>Derived display estimate</small>
+  </article>
+  <article class="stat-card">
+    <span class="stat-kicker">Buzzer Status</span>
+    <strong id="buzzer-value">OFF</strong>
+    <small id="buzzerStatNote">No alert</small>
+  </article>
+  <article class="stat-card">
+    <span class="stat-kicker">Bluetooth Status</span>
+    <strong id="bluetooth-value">Connected</strong>
+    <small id="bluetoothSignalText">Signal active</small>
+  </article>
+  <article class="stat-card">
+    <span class="stat-kicker">Last Updated</span>
+    <strong id="updatedStatValue">10:30:45 AM</strong>
+    <small id="updatedStatDate">May 24, 2026</small>
+  </article>
+</section>
+
+<section class="two-column-grid">
+  <article class="panel chart-panel">
+    <header class="panel-heading">
+      <div>
+        <p class="eyebrow">Trend chart</p>
+        <h2>UV Index Trend (Estimated vs Weather)</h2>
+      </div>
+      <select id="trendRangeSelect" aria-label="Trend range">
+        <option value="today">Today</option>
+        <option value="week">7 Days</option>
+      </select>
+    </header>
+    <div class="chart-container">
+      <canvas id="uvTrendChart" aria-label="Estimated local UV and weather UV trend chart"></canvas>
+    </div>
+  </article>
+
+  <article class="panel comparison-panel" id="comparisonPanel">
+    <header class="panel-heading compact">
+      <div>
+        <p class="eyebrow">Environmental comparison</p>
+        <h2>Brightness, daylight, and weather alignment</h2>
+      </div>
+    </header>
+    <div class="comparison-grid">
+      <div><span>Weather Condition</span><strong id="comparisonWeather">Loading weather...</strong></div>
+      <div><span>Daylight Status</span><strong id="comparisonDaylight">--</strong></div>
+      <div><span>Expected UV Level</span><strong id="comparisonExpected">--</strong></div>
+      <div><span>Estimated UV Level</span><strong id="comparisonEstimated">--</strong></div>
+    </div>
+    <div class="analysis-callout">
+      <h3>Analysis</h3>
+      <p id="comparisonMessage">Waiting for live weather and sensor data.</p>
+    </div>
+  </article>
+</section>
+
+<section class="three-column-grid">
+  <article class="panel oled-panel" id="oledPanel">
+    <header class="panel-heading compact">
+      <div>
+        <p class="eyebrow">OLED display simulation</p>
+        <h2>ESP32 front-panel preview</h2>
+      </div>
+    </header>
+    <pre id="oledSimulation"><span id="oled-lux">Lux: 12450</span>
+<span id="oled-risk">UV Risk: MODERATE</span>
+<span id="oled-buzzer">Buzzer: OFF</span>
+<span id="oled-ble">BLE: CONNECTED</span></pre>
+  </article>
+
+  <article class="panel recommendation-panel">
+    <header class="panel-heading compact">
+      <div>
+        <p class="eyebrow">Recommendations</p>
+        <h2>Safety guidance</h2>
+      </div>
+    </header>
+    <ul id="recommendationList">
+      <li>Use sunscreen SPF 30+.</li>
+      <li>Wear sunglasses outdoors.</li>
+      <li>Stay hydrated.</li>
+      <li>Avoid direct sun from 12 PM to 3 PM.</li>
+    </ul>
+  </article>
+
+  <article class="panel guide-panel">
+    <header class="panel-heading compact">
+      <div>
+        <p class="eyebrow">UV index guide</p>
+        <h2>Risk scale</h2>
+      </div>
+    </header>
+    <div class="uv-guide">
+      <div><i class="guide-low"></i><span>0-2</span><strong>Low</strong></div>
+      <div><i class="guide-moderate"></i><span>3-5</span><strong>Moderate</strong></div>
+      <div><i class="guide-high"></i><span>6-7</span><strong>High</strong></div>
+      <div><i class="guide-very-high"></i><span>8-10</span><strong>Very High</strong></div>
+      <div><i class="guide-extreme"></i><span>11+</span><strong>Extreme</strong></div>
+    </div>
+  </article>
+</section>
+
+<section class="panel forecast-panel">
+  <header class="panel-heading compact">
+    <div>
+      <p class="eyebrow">7-day weather forecast</p>
+      <h2>Daily outlook</h2>
     </div>
   </header>
-
-  <section class="status-grid">
-    <article class="sensor-card primary-sensor">
-      <p class="card-label">Current VEML6030 Reading</p>
-      <div class="lux-display">
-        <strong id="luxValue">--</strong>
-        <span>lux</span>
-      </div>
-      <div id="lightLevelValue" class="level-pill">No reading</div>
-      <p id="lightAdvice" class="soft-text">Connect Bluetooth or start demo mode to receive sensor data.</p>
-    </article>
-
-    <article class="sensor-card">
-      <p class="card-label">Threshold</p>
-      <h2 id="thresholdStatus">Waiting</h2>
-      <p id="thresholdRange" class="soft-text">Safe range: 50-50000 lux</p>
-      <div class="threshold-meter">
-        <span class="low-zone"></span>
-        <span class="safe-zone"></span>
-        <span class="high-zone"></span>
-        <i id="thresholdMarker"></i>
-      </div>
-    </article>
-
-    <article class="sensor-card">
-      <p class="card-label">Buzzer</p>
-      <h2 id="buzzerState">OFF</h2>
-      <p id="buzzerReason" class="soft-text">Buzzer turns on when lux is below or above threshold.</p>
-      <div id="buzzerIndicator" class="buzzer-indicator off">Buzzer OFF</div>
-    </article>
-
-    <article class="sensor-card oled-card">
-      <p class="card-label">OLED Display Preview</p>
-      <pre id="oledPreview">VEML6030
-Waiting for data...</pre>
-    </article>
-  </section>
-
-  <section class="connection-card">
-    <div>
-      <p class="card-label">Bluetooth Hardware</p>
-      <h2>ESP32 BLE Receiver</h2>
-      <p class="soft-text">
-        The browser connects to the portable ESP32 over BLE, receives VEML6030 lux packets, then saves them into this dashboard.
-      </p>
-    </div>
-    <div class="connection-actions">
-      <span id="bluetoothStatus" class="status-pill">disconnected</span>
-      <input id="ingestKeyInput" type="password" placeholder="Ingest API key" autocomplete="off" />
-      <button id="connectBluetoothBtn" type="button">Connect Bluetooth</button>
-      <button id="disconnectBluetoothBtn" type="button">Disconnect</button>
-    </div>
-    <p id="bluetoothPacket" class="packet-text">Last packet: none</p>
-  </section>
-
-  <section class="comparison-strip">
-    <article>
-      <p class="card-label">Hardware Location</p>
-      <h3 id="hardwareLocation">Unknown location</h3>
-      <p id="hardwareCoordinates" class="soft-text">No coordinates received yet.</p>
-    </article>
-    <article>
-      <p class="card-label">Outdoor Light Estimate</p>
-      <h3 id="weatherLuxCompare">-- lux</h3>
-      <p id="weatherBasisCompare" class="soft-text">Uses solar radiation for the selected location only.</p>
-    </article>
-    <article>
-      <p class="card-label">Sensor Difference</p>
-      <h3 id="luxDifferenceCompare">-- lux</h3>
-      <p id="comparisonStatus" class="soft-text">Waiting for sensor and location data.</p>
-    </article>
-  </section>
-
-  <section class="trend-panel">
-    <div class="trend-header">
-      <div>
-        <p class="eyebrow">Light trends</p>
-        <h2>Hardware Lux vs Location Estimate</h2>
-      </div>
-      <div class="trend-filters" aria-label="Chart legend">
-        <span><i class="legend-sensor"></i>VEML6030 lux</span>
-        <span><i class="legend-weather"></i>Outdoor estimated lux</span>
-        <span><i class="legend-low"></i>Low threshold</span>
-        <span><i class="legend-high"></i>High threshold</span>
-      </div>
-    </div>
-    <canvas id="lightTrendChart" width="1200" height="540"></canvas>
-  </section>
-
-  <section class="records-panel">
-    <div class="trend-header">
-      <div>
-        <p class="eyebrow">Recent readings</p>
-        <h2>Sensor, Threshold, Buzzer, OLED</h2>
-      </div>
-      <span id="deviceStatus" class="status-pill">offline</span>
-    </div>
-    <div class="table-scroll">
-      <table class="light-table">
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Lux</th>
-            <th>Level</th>
-            <th>Threshold</th>
-            <th>Buzzer</th>
-            <th>OLED</th>
-            <th>Location</th>
-          </tr>
-        </thead>
-        <tbody id="recentReadingsBody"></tbody>
-      </table>
-    </div>
-  </section>
+  <div class="forecast-grid" id="forecastGrid"></div>
 </section>
+
+<p class="footer-note">
+  VEML6030 measures ambient visible light in lux. UV values are estimated using lux trends and weather UV data.
+</p>
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 {% endblock %}

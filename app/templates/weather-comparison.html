@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Weather Comparison</p>
+    <h1>Local brightness vs weather UV context</h1>
+    <p>Weather APIs provide estimated UV and weather conditions, while the VEML6030 provides local brightness. The system compares both to estimate local UV risk.</p>
+  </div>
+</section>
+
+<section class="metric-grid">
+  <article class="metric-card"><span>Sensor Brightness</span><strong id="luxStatValue">12,450 lux</strong></article>
+  <article class="metric-card"><span>Weather UV Index</span><strong id="weatherUvValue">--</strong></article>
+  <article class="metric-card"><span>Weather Condition</span><strong id="comparisonWeather">Loading weather...</strong></article>
+  <article class="metric-card"><span>Cloud Cover</span><strong id="cloudCoverLabel">--</strong></article>
+  <article class="metric-card"><span>Daylight Status</span><strong id="comparisonDaylight">--</strong></article>
+  <article class="metric-card"><span>Weather Source</span><strong id="weatherSourceLabel">Weather unavailable</strong></article>
+  <article class="metric-card"><span>Estimated UV Risk</span><strong id="riskStatValue">--</strong></article>
+</section>
+
+<section class="two-column-grid">
+  <article class="panel chart-panel">
+    <header class="panel-heading compact">
+      <div>
+        <p class="eyebrow">Trend comparison</p>
+        <h2>Sensor estimated UV vs weather UV over time</h2>
+      </div>
+    </header>
+    <div class="chart-container">
+      <canvas id="uvTrendChart"></canvas>
+    </div>
+  </article>
+
+  <article class="panel comparison-panel">
+    <header class="panel-heading compact">
+      <div>
+        <p class="eyebrow">Analysis message</p>
+        <h2>Environmental interpretation</h2>
+      </div>
+    </header>
+    <div class="comparison-grid">
+      <div><span>Expected UV Level</span><strong id="comparisonExpected">--</strong></div>
+      <div><span>Estimated UV Level</span><strong id="comparisonEstimated">--</strong></div>
+    </div>
+    <div class="analysis-callout">
+      <h3>Analysis</h3>
+      <p id="comparisonMessage">Waiting for live weather and sensor data.</p>
+    </div>
+  </article>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

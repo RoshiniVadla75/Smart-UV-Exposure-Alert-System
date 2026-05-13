@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Live Data</p>
+    <h1>Live VEML6030 readings</h1>
+    <p>Recent Bluetooth readings from the ESP32 hardware or simulation mode.</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="data-table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr><th>Time</th><th>Device</th><th>Lux</th><th>Status</th><th>Buzzer</th><th>Source</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Latest</td><td>ESP32-VEML6030</td><td>12,450 lux</td><td>High Brightness</td><td>OFF</td><td>Bluetooth</td></tr>
+        <tr><td>Previous</td><td>ESP32-VEML6030</td><td>11,920 lux</td><td>High Brightness</td><td>OFF</td><td>Bluetooth</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

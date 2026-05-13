@@ -1,599 +1,570 @@
-let activeLocation = "Perth, Australia";
-let activeCoordinates = null;
-let currentSensorReading = null;
-let currentRecentRows = [];
-let currentWeatherSummary = null;
-let bluetoothDevice = null;
-let bluetoothCharacteristic = null;
-let bluetoothBuffer = "";
+let uvTrendChart = null;
 
-const LOW_THRESHOLD_LUX = 50;
-const HIGH_THRESHOLD_LUX = 50000;
-const BLE_UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-const BLE_UART_TX_CHARACTERISTIC_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+const DASHBOARD_DEFAULTS = {
+  lux: 0,
+  estimated_uv: null,
+  weather_uv: null,
+  risk: "Unknown",
+  buzzer: false,
+  bluetooth: "Disconnected",
+  condition: "Weather unavailable",
+  daylight: "Unknown",
+  location: "Perth, Western Australia, Australia",
+  cloud_cover: null,
+  temperature: null,
+  humidity: null,
+  wind: null,
+  sunrise: null,
+  sunset: null,
+  weather_available: false,
+  weather_source_label: "Weather unavailable",
+  weather_note: "Weather unavailable",
+  forecast: [],
+};
 
-function resultValue(result, fallback = null) {
-  return result.status === "fulfilled" ? result.value : fallback;
-}
-
-function numberValue(value, fallback = 0) {
-  if (value === null || value === undefined || value === "") return fallback;
-  const numericValue = Number(value);
-  return Number.isFinite(numericValue) ? numericValue : fallback;
-}
-
-function rounded(value, fallback = "--") {
-  const numericValue = Number(value);
-  if (!Number.isFinite(numericValue)) return fallback;
-  return Math.round(numericValue).toLocaleString();
-}
-
-function signedLux(value) {
-  const numericValue = Number(value);
-  if (!Number.isFinite(numericValue)) return "-- lux";
-  const sign = numericValue > 0 ? "+" : "";
-  return `${sign}${Math.round(numericValue).toLocaleString()} lux`;
-}
-
-function lightAdvice(level) {
-  if (level === "Too Dark") return "Below the low threshold. OLED warns the user and the buzzer should turn on.";
-  if (level === "Dim") return "Low but inside the safe threshold band. OLED shows dim light; buzzer stays off.";
-  if (level === "Ideal") return "Light is in the ideal range. OLED shows normal status; buzzer stays off.";
-  if (level === "Bright") return "Bright but still inside the safe threshold band. Monitor for glare.";
-  if (level === "Very Bright") return "Above the high threshold. OLED warns the user and the buzzer should turn on.";
-  return "Connect Bluetooth or start demo mode to receive sensor data.";
-}
-
-function expectedOutdoorLux(weather) {
-  const current = weather?.current || {};
-  const radiation = numberValue(current.shortwave_radiation_w_m2, null);
-  if (radiation !== null) return Math.max(0, radiation * 120);
-
-  const isDay = numberValue(current.is_day, 0) === 1;
-  if (!isDay) return 0;
-  const cloudCover = Math.max(0, Math.min(numberValue(current.cloud_cover_percent, 50), 100));
-  return Math.max(800, 100000 * (1 - cloudCover / 100));
-}
-
-function thresholdStatus(lux) {
-  const value = numberValue(lux, null);
-  if (value === null) return "Waiting";
-  if (value < LOW_THRESHOLD_LUX) return "Below Threshold";
-  if (value >= HIGH_THRESHOLD_LUX) return "Above Threshold";
-  return "Within Threshold";
-}
-
-function buzzerState(status) {
-  return status === "Within Threshold" ? "OFF" : status === "Waiting" ? "OFF" : "ON";
-}
-
-function oledMessage(reading) {
-  if (!reading) return "VEML6030\nWaiting for data...";
-  return `VEML6030\nLux: ${rounded(reading.lux)} lx\n${reading.light_level}\nBuzzer: ${reading.buzzer_state || buzzerState(reading.threshold_status)}`;
-}
-
-function locationLabelFromReading(reading) {
-  if (!reading) return "Unknown location";
-  if (reading.location_label) return reading.location_label;
-  if (reading.latitude !== null && reading.latitude !== undefined && reading.longitude !== null && reading.longitude !== undefined) {
-    return `${Number(reading.latitude).toFixed(5)}, ${Number(reading.longitude).toFixed(5)}`;
-  }
-  return activeLocation || "Unknown location";
-}
-
-function coordinatesText(reading) {
-  const lat = reading?.latitude ?? activeCoordinates?.latitude;
-  const lon = reading?.longitude ?? activeCoordinates?.longitude;
-  if (lat === null || lat === undefined || lon === null || lon === undefined) {
-    return "No coordinates received yet.";
-  }
-  return `Lat ${Number(lat).toFixed(5)}, Lon ${Number(lon).toFixed(5)}`;
-}
-
-function setupCanvas(canvas) {
-  const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.floor(rect.width * dpr));
-  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  return { ctx, width: rect.width, height: rect.height };
-}
-
-function drawRoundedLabel(ctx, text, x, y) {
-  ctx.font = "700 15px Segoe UI, Arial";
-  const width = ctx.measureText(text).width + 22;
-  ctx.fillStyle = "#22232f";
-  ctx.beginPath();
-  ctx.roundRect(x - width / 2, y - 22, width, 34, 8);
-  ctx.fill();
-  ctx.fillStyle = "#ffffff";
-  ctx.textAlign = "center";
-  ctx.fillText(text, x, y);
-}
-
-function drawNoData(ctx, width, height) {
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "rgba(255,255,255,0.76)";
-  ctx.font = "700 18px Segoe UI, Arial";
-  ctx.textAlign = "center";
-  ctx.fillText("Connect Bluetooth hardware to start the light trend", width / 2, height / 2);
-}
-
-function estimateSeries(length, weather) {
-  const hourly = weather?.hourly || [];
-  if (!hourly.length) return Array.from({ length }, () => expectedOutdoorLux(weather));
-  return Array.from({ length }, (_, index) => {
-    const row = hourly[Math.min(index, hourly.length - 1)];
-    const radiation = numberValue(row.shortwave_radiation_w_m2, null);
-    if (radiation !== null) return Math.max(0, radiation * 120);
-    return expectedOutdoorLux(weather);
-  });
-}
-
-function drawLightTrend(rows, weather) {
-  const canvas = document.getElementById("lightTrendChart");
-  if (!canvas) return;
-  const { ctx, width, height } = setupCanvas(canvas);
-  const ordered = [...rows].reverse();
-  if (!ordered.length) {
-    drawNoData(ctx, width, height);
+function text(id, value) {
+  if (Array.isArray(id)) {
+    id.forEach((item) => text(item, value));
     return;
   }
-
-  const sensorValues = ordered.map((row) => numberValue(row.lux));
-  const weatherValues = estimateSeries(ordered.length, weather);
-  const maxValue = Math.max(...sensorValues, ...weatherValues, HIGH_THRESHOLD_LUX, 1000);
-  const yMax = Math.min(120000, Math.ceil(maxValue / 1000) * 1000 || 1000);
-  const padding = { top: 48, right: 40, bottom: 64, left: 82 };
-  const plotWidth = width - padding.left - padding.right;
-  const plotHeight = height - padding.top - padding.bottom;
-
-  const xFor = (index) => padding.left + (ordered.length === 1 ? plotWidth : (plotWidth / (ordered.length - 1)) * index);
-  const yFor = (value) => padding.top + plotHeight - (Math.max(0, value) / yMax) * plotHeight;
-
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "#252b52";
-  ctx.fillRect(0, 0, width, height);
-
-  ctx.strokeStyle = "rgba(255,255,255,0.12)";
-  ctx.lineWidth = 1;
-  ctx.font = "700 14px Segoe UI, Arial";
-  ctx.fillStyle = "#f7f8ff";
-  ctx.textAlign = "right";
-  for (let i = 0; i <= 5; i += 1) {
-    const value = (yMax / 5) * i;
-    const y = yFor(value);
-    ctx.beginPath();
-    ctx.moveTo(padding.left, y);
-    ctx.lineTo(width - padding.right, y);
-    ctx.stroke();
-    ctx.fillText(`${Math.round(value).toLocaleString()} lx`, padding.left - 14, y + 5);
-  }
-
-  function thresholdLine(value, color, label) {
-    const y = yFor(value);
-    ctx.setLineDash([9, 8]);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(padding.left, y);
-    ctx.lineTo(width - padding.right, y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = color;
-    ctx.textAlign = "left";
-    ctx.fillText(label, padding.left + 10, y - 8);
-  }
-
-  thresholdLine(LOW_THRESHOLD_LUX, "#60a5fa", "Low threshold");
-  thresholdLine(HIGH_THRESHOLD_LUX, "#ef4444", "High threshold");
-
-  function drawSeries(values, color, dashed = false, lineWidth = 3) {
-    ctx.setLineDash(dashed ? [4, 8] : []);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = lineWidth;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    values.forEach((value, index) => {
-      const x = xFor(index);
-      const y = yFor(value);
-      if (index === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  const gradient = ctx.createLinearGradient(0, padding.top, 0, height - padding.bottom);
-  gradient.addColorStop(0, "rgba(255, 208, 63, 0.26)");
-  gradient.addColorStop(1, "rgba(255, 208, 63, 0.02)");
-  ctx.beginPath();
-  sensorValues.forEach((value, index) => {
-    const x = xFor(index);
-    const y = yFor(value);
-    if (index === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.lineTo(xFor(sensorValues.length - 1), height - padding.bottom);
-  ctx.lineTo(xFor(0), height - padding.bottom);
-  ctx.closePath();
-  ctx.fillStyle = gradient;
-  ctx.fill();
-
-  drawSeries(weatherValues, "#ffffff", true, 3);
-  drawSeries(sensorValues, "#ffd03f", false, 4);
-
-  sensorValues.forEach((value, index) => {
-    const x = xFor(index);
-    const y = yFor(value);
-    ctx.beginPath();
-    ctx.arc(x, y, 4, 0, Math.PI * 2);
-    ctx.fillStyle = "#ffd03f";
-    ctx.fill();
-  });
-
-  const latestIndex = sensorValues.length - 1;
-  const latestX = xFor(latestIndex);
-  ctx.strokeStyle = "rgba(255,255,255,0.35)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(latestX, padding.top);
-  ctx.lineTo(latestX, height - padding.bottom);
-  ctx.stroke();
-  drawRoundedLabel(ctx, "Now", latestX, padding.top + 24);
-
-  ctx.fillStyle = "#c9d1e8";
-  ctx.textAlign = "center";
-  ctx.font = "700 13px Segoe UI, Arial";
-  ordered.forEach((row, index) => {
-    if (index % Math.ceil(ordered.length / 6) !== 0 && index !== ordered.length - 1) return;
-    const label = new Date(row.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    ctx.fillText(label, xFor(index), height - 26);
-  });
+  const element = document.getElementById(id);
+  if (element) element.textContent = value;
 }
 
-function updateRecentTable(rows) {
-  const body = document.getElementById("recentReadingsBody");
-  if (!body) return;
-  if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="7">No readings yet. Connect Bluetooth hardware or start demo mode.</td></tr>';
-    return;
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function safeNumber(value, fallback = 0) {
+  const numeric = numberOrNull(value);
+  return numeric === null ? fallback : numeric;
+}
+
+function titleCase(value) {
+  return String(value || "")
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function uvRisk(value) {
+  const score = numberOrNull(value);
+  if (score === null) return "Unavailable";
+  if (score <= 2) return "Low";
+  if (score <= 5) return "Moderate";
+  if (score <= 7) return "High";
+  if (score <= 10) return "Very High";
+  return "Extreme";
+}
+
+function luxBand(lux) {
+  const value = safeNumber(lux);
+  if (value < 1000) return "Low brightness";
+  if (value < 10000) return "Moderate brightness";
+  return "High brightness";
+}
+
+function formatLux(value) {
+  return `${Math.round(safeNumber(value)).toLocaleString()} lux`;
+}
+
+function formatPercent(value) {
+  const numeric = numberOrNull(value);
+  return numeric === null ? "--" : `${Math.round(numeric)}%`;
+}
+
+function formatTemperature(value) {
+  const numeric = numberOrNull(value);
+  return numeric === null ? "Weather unavailable" : `${Math.round(numeric)}\u00b0C`;
+}
+
+function formatWind(value) {
+  const numeric = numberOrNull(value);
+  return numeric === null ? "--" : `${Math.round(numeric)} km/h`;
+}
+
+function formatUv(value) {
+  const numeric = numberOrNull(value);
+  if (numeric === null) return "--";
+  return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(1);
+}
+
+function formatDateLabel(value) {
+  if (!value) return "--";
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+}
+
+function formatTimeLabel(value) {
+  if (!value) return "--";
+  if (!String(value).includes("T")) return String(value);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function weatherMode(condition, daylight) {
+  const value = String(condition || "").toLowerCase();
+  if (String(daylight || "").toLowerCase() === "night") return "night";
+  if (value.includes("rain") || value.includes("drizzle") || value.includes("storm")) return "rainy";
+  if (value.includes("cloud") || value.includes("overcast") || value.includes("fog")) return "cloudy";
+  return "sunny";
+}
+
+function climateSummary(weatherResponse = {}) {
+  const status = weatherResponse.status || "error";
+  const source = weatherResponse.source || "unavailable";
+  const current = weatherResponse.current || {};
+  const daily = weatherResponse.daily || {};
+  const isLive = status === "ok" && source !== "demo";
+  const isDemo = source === "demo";
+  const isDay = current.is_day;
+  const weatherUv = numberOrNull(current.uv_index ?? daily.uv_index_max);
+
+  return {
+    available: status === "ok",
+    source,
+    source_label:
+      weatherResponse.source_label ||
+      (isLive ? "Live weather" : isDemo ? "Demo weather" : "Weather unavailable"),
+    note:
+      weatherResponse.note ||
+      (isLive ? "Live weather" : isDemo ? "Demo weather data" : "Weather unavailable"),
+    condition: status === "ok" ? current.condition || "Mixed Conditions" : "Weather unavailable",
+    daylight: isDay === 0 ? "Night" : isDay === 1 ? "Day" : "Unknown",
+    cloud_cover: numberOrNull(current.cloud_cover_percent),
+    temperature: numberOrNull(current.temperature_c),
+    humidity: numberOrNull(current.humidity_percent),
+    wind: numberOrNull(current.wind_speed_kmh),
+    weather_uv: weatherUv,
+    sunrise: daily.sunrise || null,
+    sunset: daily.sunset || null,
+    location: weatherResponse.location?.label || DASHBOARD_DEFAULTS.location,
+    forecast: Array.isArray(weatherResponse.forecast) ? weatherResponse.forecast : [],
+  };
+}
+
+function estimateUvFromEnvironment(lux, weatherUv, daylight, cloudCover) {
+  const brightnessFactor = Math.min(1.25, safeNumber(lux) / 28000);
+  const dayFactor = String(daylight).toLowerCase() === "night" ? 0.18 : 1;
+  const cloudFactor =
+    numberOrNull(cloudCover) === null ? 1 : Math.max(0.48, 1 - safeNumber(cloudCover) / 180);
+  const weatherComponent = numberOrNull(weatherUv) === null ? 0 : safeNumber(weatherUv) * 0.58;
+  const composite = weatherComponent + brightnessFactor * 5.4 * cloudFactor * dayFactor;
+  return Math.max(0, Math.min(12, Math.round(composite * 10) / 10));
+}
+
+function deriveComparison(model, risk) {
+  if (!model.weather_available) {
+    return {
+      expected: "Weather unavailable",
+      message: "Weather unavailable. The local UV estimate is using sensor brightness only until live weather reconnects.",
+    };
   }
 
-  body.innerHTML = rows.slice(0, 12).map((row) => {
-    const threshold = row.threshold_status || thresholdStatus(row.lux);
-    const buzzer = row.buzzer_state || buzzerState(threshold);
-    const oled = row.oled_message || oledMessage(row).replace(/\n/g, " / ");
-    return `<tr>
-      <td>${formatDateTime(row.timestamp)}</td>
-      <td>${formatLux(row.lux)}</td>
-      <td>${lightLevelBadge(row.light_level)}</td>
-      <td>${escapeHtml(threshold)}</td>
-      <td><span class="buzzer-chip ${buzzer === "ON" ? "on" : "off"}">${buzzer}</span></td>
-      <td>${escapeHtml(oled)}</td>
-      <td>${escapeHtml(locationLabelFromReading(row))}</td>
-    </tr>`;
-  }).join("");
-}
-
-function updateComparison() {
-  const hardwareLux = numberValue(currentSensorReading?.lux, null);
-  const weatherLux = currentWeatherSummary ? expectedOutdoorLux(currentWeatherSummary) : null;
-  document.getElementById("weatherLuxCompare").textContent = weatherLux === null ? "-- lux" : formatLux(weatherLux);
-
-  const basis = currentWeatherSummary?.current?.shortwave_radiation_w_m2;
-  document.getElementById("weatherBasisCompare").textContent =
-    basis === null || basis === undefined
-      ? "Estimated from daylight at the selected location."
-      : `Estimated from ${rounded(basis)} W/m2 solar radiation at the selected location.`;
-
-  if (hardwareLux === null || weatherLux === null) {
-    document.getElementById("luxDifferenceCompare").textContent = "-- lux";
-    document.getElementById("comparisonStatus").textContent = "Waiting for sensor and location data.";
-    return;
+  const lowerCondition = String(model.condition).toLowerCase();
+  if (String(model.daylight).toLowerCase() === "night") {
+    return {
+      expected: "Low",
+      message: "Night-time conditions reduce expected UV exposure. The monitor keeps local brightness separate from weather-derived UV context.",
+    };
   }
-
-  const difference = hardwareLux - weatherLux;
-  const percent = weatherLux > 0 ? Math.abs(difference) / weatherLux * 100 : hardwareLux <= LOW_THRESHOLD_LUX ? 0 : Infinity;
-  document.getElementById("luxDifferenceCompare").textContent = signedLux(difference);
-  if (percent <= 25) {
-    document.getElementById("comparisonStatus").textContent = "Close to outdoor estimate.";
-  } else if (difference < 0) {
-    document.getElementById("comparisonStatus").textContent = "Sensor is lower than outdoor estimate. It may be shaded or indoors.";
-  } else {
-    document.getElementById("comparisonStatus").textContent = "Sensor is higher than outdoor estimate. Check nearby artificial or reflected light.";
+  if (lowerCondition.includes("rain") || lowerCondition.includes("storm") || lowerCondition.includes("fog")) {
+    return {
+      expected: "Low to Moderate",
+      message: `Cloudy or wet conditions reduce expected exposure. The estimated local UV display is ${risk.toLowerCase()} after combining brightness and live weather context.`,
+    };
   }
-}
-
-function updateSensor(latest, recent, status) {
-  currentSensorReading = latest;
-  currentRecentRows = recent || [];
-  const lux = numberValue(latest?.lux, null);
-  const level = latest?.light_level || "No reading";
-  const threshold = latest?.threshold_status || thresholdStatus(lux);
-  const buzzer = latest?.buzzer_state || buzzerState(threshold);
-
-  document.getElementById("luxValue").textContent = lux === null ? "--" : rounded(lux);
-  document.getElementById("lightLevelValue").innerHTML = latest ? lightLevelBadge(level) : "No reading";
-  document.getElementById("lightAdvice").textContent = lightAdvice(level);
-  document.getElementById("thresholdStatus").textContent = threshold;
-  document.getElementById("thresholdRange").textContent = `Safe range: ${LOW_THRESHOLD_LUX}-${HIGH_THRESHOLD_LUX.toLocaleString()} lux`;
-  document.getElementById("buzzerState").textContent = buzzer;
-  document.getElementById("buzzerReason").textContent =
-    buzzer === "ON" ? "Threshold exceeded. Hardware buzzer should alert the user." : "Reading is inside threshold. Buzzer remains off.";
-  document.getElementById("buzzerIndicator").textContent = `Buzzer ${buzzer}`;
-  document.getElementById("buzzerIndicator").className = `buzzer-indicator ${buzzer === "ON" ? "on" : "off"}`;
-  document.getElementById("oledPreview").textContent = latest?.oled_message || oledMessage(latest);
-  document.getElementById("hardwareLocation").textContent = locationLabelFromReading(latest);
-  document.getElementById("hardwareCoordinates").textContent = coordinatesText(latest);
-  document.getElementById("deviceStatus").textContent = status?.online || "offline";
-
-  const markerPercent = lux === null
-    ? 0
-    : Math.max(0, Math.min(100, (Math.log10(Math.max(1, lux)) / Math.log10(188000)) * 100));
-  document.getElementById("thresholdMarker").style.left = `${markerPercent}%`;
-
-  updateRecentTable(recent || []);
-  updateComparison();
-  drawLightTrend(currentRecentRows, currentWeatherSummary);
-}
-
-function updateWeather(weather) {
-  if (!weather) return;
-  currentWeatherSummary = weather;
-  if (weather.location?.label && !activeCoordinates) {
-    activeLocation = weather.location.label;
-    document.getElementById("locationSearch").value = activeLocation;
+  if (numberOrNull(model.weather_uv) !== null && model.estimated_uv + 1 < model.weather_uv) {
+    return {
+      expected: uvRisk(model.weather_uv),
+      message: "Local brightness is lower than the live weather UV context suggests. Shade, obstruction, or the immediate environment may be reducing exposure.",
+    };
   }
-  updateComparison();
-  drawLightTrend(currentRecentRows, currentWeatherSummary);
+  return {
+    expected: uvRisk(model.weather_uv),
+    message: `Local brightness and live weather conditions are consistent. Estimated UV exposure is ${risk.toLowerCase()} today.`,
+  };
 }
 
-function setBluetoothStatus(message) {
-  document.getElementById("bluetoothStatus").textContent = message;
-}
+function setGauge(prefix, value) {
+  const numeric = numberOrNull(value);
+  const valueId =
+    prefix === "estimated"
+      ? ["estimatedUvValue", "estimated-uv-value"]
+      : [`${prefix}UvValue`, `${prefix}-uv-value`];
 
-function apiKeyHeader() {
-  const key = document.getElementById("ingestKeyInput").value.trim();
-  if (key) localStorage.setItem("lightSensorIngestKey", key);
-  return key ? { "X-API-Key": key } : {};
-}
+  text(valueId, formatUv(numeric));
+  text(`${prefix}RiskLabel`, numeric === null ? "Weather unavailable" : uvRisk(numeric));
 
-function enrichPayloadWithLocation(payload) {
-  const enriched = { ...payload };
-  if (!enriched.location_label && activeLocation) enriched.location_label = activeLocation;
-  if (activeCoordinates) {
-    if (enriched.latitude === undefined || enriched.latitude === null) enriched.latitude = activeCoordinates.latitude;
-    if (enriched.longitude === undefined || enriched.longitude === null) enriched.longitude = activeCoordinates.longitude;
-  }
-  return enriched;
-}
-
-function parseBluetoothPayload(text) {
-  const cleanText = text.trim();
-  if (!cleanText) return null;
-
-  if (cleanText.startsWith("{")) {
-    const payload = JSON.parse(cleanText);
-    return enrichPayloadWithLocation({
-      device_id: payload.device_id || payload.device || "veml6030-ble-01",
-      lux: Number(payload.lux),
-      wifi_signal: payload.wifi_signal ?? payload.rssi,
-      timestamp: payload.timestamp || new Date().toISOString(),
-      source: "hardware",
-      location_label: payload.location_label || payload.location,
-      latitude: payload.latitude ?? payload.lat,
-      longitude: payload.longitude ?? payload.lon ?? payload.lng,
-    });
-  }
-
-  const pairs = {};
-  cleanText.split(/[;,]/).forEach((part) => {
-    const [key, value] = part.split("=").map((item) => item?.trim());
-    if (key && value !== undefined) pairs[key.toLowerCase()] = value;
-  });
-
-  if (pairs.lux) {
-    return enrichPayloadWithLocation({
-      device_id: pairs.device_id || pairs.device || "veml6030-ble-01",
-      lux: Number(pairs.lux),
-      wifi_signal: pairs.wifi_signal || pairs.rssi || null,
-      timestamp: pairs.timestamp || new Date().toISOString(),
-      source: "hardware",
-      location_label: pairs.location_label || pairs.location,
-      latitude: pairs.latitude || pairs.lat,
-      longitude: pairs.longitude || pairs.lon || pairs.lng,
-    });
-  }
-
-  const values = cleanText.split(/[,\s]+/).filter(Boolean);
-  const firstIsNumber = Number.isFinite(Number(values[0]));
-  return enrichPayloadWithLocation({
-    device_id: firstIsNumber ? "veml6030-ble-01" : values[0],
-    lux: Number(firstIsNumber ? values[0] : values[1]),
-    wifi_signal: firstIsNumber ? values[1] || null : values[2] || null,
-    timestamp: new Date().toISOString(),
-    source: "hardware",
-  });
-}
-
-async function postBluetoothReading(payload) {
-  if (!Number.isFinite(payload.lux)) {
-    throw new Error("Bluetooth packet did not include a valid lux value.");
-  }
-
-  const response = await fetch(`${API_BASE}/readings`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...apiKeyHeader(),
-    },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error || "Failed to save Bluetooth reading.");
-  }
-  return response.json();
-}
-
-async function handleBluetoothText(text) {
-  const payload = parseBluetoothPayload(text);
-  if (!payload) return;
-  document.getElementById("bluetoothPacket").textContent = `Last packet: ${text.trim()}`;
-  await postBluetoothReading(payload);
-  setBluetoothStatus("receiving");
-  refreshDashboard();
-}
-
-function handleBluetoothNotification(event) {
-  const value = new TextDecoder().decode(event.target.value);
-  bluetoothBuffer += value;
-  const packets = bluetoothBuffer.split(/\r?\n/);
-  bluetoothBuffer = packets.pop();
-  packets.filter(Boolean).forEach((packet) => {
-    handleBluetoothText(packet).catch((error) => {
-      console.error("Bluetooth packet failed", error);
-      setBluetoothStatus("packet error");
-    });
-  });
-
-  const possiblePacket = bluetoothBuffer.trim();
-  if (
-    possiblePacket &&
-    ((possiblePacket.startsWith("{") && possiblePacket.endsWith("}")) ||
-      possiblePacket.includes("lux=") ||
-      /^-?\d+(\.\d+)?([,\s]|$)/.test(possiblePacket))
-  ) {
-    bluetoothBuffer = "";
-    handleBluetoothText(possiblePacket).catch((error) => {
-      console.error("Bluetooth packet failed", error);
-      setBluetoothStatus("packet error");
-    });
+  const needle = document.getElementById(`${prefix}Needle`);
+  if (needle) {
+    const angle = numeric === null ? -90 : -90 + Math.min(1, numeric / 12) * 180;
+    needle.style.transform = `rotate(${angle}deg)`;
   }
 }
 
 async function connectBluetooth() {
+  console.log("Bluetooth button clicked");
+
   if (!navigator.bluetooth) {
-    setBluetoothStatus("unsupported");
+    alert("Web Bluetooth is not supported in this browser. Use Chrome or Edge.");
     return;
   }
 
   try {
-    setBluetoothStatus("pairing");
-    bluetoothDevice = await navigator.bluetooth.requestDevice({
-      filters: [
-        { services: [BLE_UART_SERVICE_UUID] },
-        { namePrefix: "VEML" },
-        { namePrefix: "Light" },
-        { namePrefix: "ESP32" },
-      ],
-      optionalServices: [BLE_UART_SERVICE_UUID],
-    });
-    bluetoothDevice.addEventListener("gattserverdisconnected", () => {
-      setBluetoothStatus("disconnected");
-      bluetoothCharacteristic = null;
+    const device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: ["12345678-1234-1234-1234-123456789abc"]
     });
 
-    setBluetoothStatus("connecting");
-    const server = await bluetoothDevice.gatt.connect();
-    const service = await server.getPrimaryService(BLE_UART_SERVICE_UUID);
-    bluetoothCharacteristic = await service.getCharacteristic(BLE_UART_TX_CHARACTERISTIC_UUID);
-    bluetoothCharacteristic.addEventListener("characteristicvaluechanged", handleBluetoothNotification);
-    await bluetoothCharacteristic.startNotifications();
-    setBluetoothStatus("connected");
+    console.log("Selected device:", device.name);
+    alert("Connected popup opened. Selected: " + device.name);
+
   } catch (error) {
-    console.error("Bluetooth connection failed", error);
-    setBluetoothStatus("connection failed");
+    console.error("Bluetooth error:", error);
+    alert("Bluetooth failed: " + error.message);
   }
 }
 
-function disconnectBluetooth() {
-  if (bluetoothCharacteristic) {
-    bluetoothCharacteristic.removeEventListener("characteristicvaluechanged", handleBluetoothNotification);
-    bluetoothCharacteristic = null;
-  }
-  if (bluetoothDevice?.gatt?.connected) bluetoothDevice.gatt.disconnect();
-  setBluetoothStatus("disconnected");
-}
-
-async function useCurrentLocation() {
-  if (!navigator.geolocation) {
-    document.getElementById("hardwareCoordinates").textContent = "Browser geolocation is not available.";
-    return;
-  }
-
-  navigator.geolocation.getCurrentPosition(
-    (position) => {
-      activeCoordinates = {
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-      };
-      activeLocation = "Current hardware location";
-      document.getElementById("locationSearch").value = activeLocation;
-      refreshDashboard();
-    },
-    (error) => {
-      document.getElementById("hardwareCoordinates").textContent = `Location unavailable: ${error.message}`;
-    },
-    { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
+function updateDashboardFromBLE(data) {
+  const estimatedUv = safeNumber(
+    data.estimated_uv,
+    estimateUvFromEnvironment(data.lux, null, "Unknown", null)
   );
+  const risk = data.risk || uvRisk(estimatedUv);
+  const buzzerOn = Boolean(data.buzzer);
+
+  text(["lux-value", "luxStatValue"], formatLux(data.lux));
+  text(["estimated-uv-value", "estimatedUvValue"], formatUv(estimatedUv));
+  text(["risk-value", "riskStatValue"], risk);
+  text(["buzzer-value", "buzzerStatValue"], buzzerOn ? "ON" : "OFF");
+  text(["bluetooth-value", "bluetoothStatValue"], "Connected");
+  text("oled-lux", `Lux: ${Math.round(safeNumber(data.lux))}`);
+  text("oled-risk", `UV Risk: ${risk.toUpperCase()}`);
+  text("oled-buzzer", `Buzzer: ${buzzerOn ? "ON" : "OFF"}`);
+  text("oled-ble", "BLE: CONNECTED");
+  text("luxBandLabel", luxBand(data.lux));
+  text("buzzerStatNote", buzzerOn ? "Alert active" : "No alert");
+  setGauge("estimated", estimatedUv);
+  updateBluetoothStatus("Connected");
 }
 
-async function fetchWeather() {
-  const params = new URLSearchParams();
-  params.set("location", activeLocation);
-  if (activeCoordinates) {
-    params.set("latitude", activeCoordinates.latitude);
-    params.set("longitude", activeCoordinates.longitude);
+function updateBluetoothStatus(status) {
+  text(["bluetooth-value", "bluetoothStatValue"], status);
+  text("heroBluetoothLabel", status);
+  text("sidebarBluetoothLabel", status);
+  text("mobileBluetoothLabel", status === "Connected" ? "BLE On" : "BLE Off");
+  text("oled-ble", `BLE: ${String(status).toUpperCase()}`);
+}
+
+function applyHeroMode(condition, daylight) {
+  const hero = document.getElementById("heroPanel");
+  if (!hero) return;
+  const mode = weatherMode(condition, daylight);
+  hero.classList.remove("hero-sunny", "hero-cloudy", "hero-rainy", "hero-night");
+  hero.classList.add(`hero-${mode}`);
+
+  const orb = document.getElementById("weatherOrb");
+  if (orb) {
+    orb.className = `weather-orb ${mode === "night" ? "night" : "sunny"}`;
   }
-  return apiGet(`/weather?${params.toString()}`);
 }
 
-async function refreshDashboard() {
-  try {
-    const [latestResult, recentResult, statusResult] = await Promise.allSettled([
-      apiGet("/readings/latest"),
-      apiGet("/readings/recent?limit=60"),
-      apiGet("/device-status"),
-    ]);
-    const latest = resultValue(latestResult);
-    if (latest?.latitude !== null && latest?.latitude !== undefined && latest?.longitude !== null && latest?.longitude !== undefined) {
-      activeCoordinates = {
-        latitude: latest.latitude,
-        longitude: latest.longitude,
-      };
-      if (latest.location_label) {
-        activeLocation = latest.location_label;
-        document.getElementById("locationSearch").value = activeLocation;
-      }
-    }
+function setClock() {
+  const now = new Date();
+  text("clockValue", now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+  text("dateValue", now.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }));
+}
 
-    updateSensor(
-      latest,
-      resultValue(recentResult, []),
-      resultValue(statusResult, {})
+function buildTrendSeries(historyRows, estimatedUv, weatherUv, daylight, cloudCover) {
+  if (!Array.isArray(historyRows) || historyRows.length < 2) {
+    return {
+      labels: ["Now"],
+      estimated: [numberOrNull(estimatedUv)],
+      weather: [numberOrNull(weatherUv)],
+    };
+  }
+
+  const rows = historyRows.slice(-9);
+  return {
+    labels: rows.map((row) =>
+      new Date(row.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    ),
+    estimated: rows.map((row) =>
+      estimateUvFromEnvironment(row.lux, weatherUv, daylight, cloudCover)
+    ),
+    weather: rows.map(() => numberOrNull(weatherUv)),
+  };
+}
+
+function renderTrendChart(series) {
+  const canvas = document.getElementById("uvTrendChart");
+  if (!canvas || typeof Chart === "undefined") return;
+  if (uvTrendChart) uvTrendChart.destroy();
+
+  uvTrendChart = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels: series.labels,
+      datasets: [
+        {
+          label: "Estimated Local UV",
+          data: series.estimated,
+          borderColor: "#a764ff",
+          backgroundColor: "rgba(167, 100, 255, 0.14)",
+          tension: 0.42,
+          fill: false,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+        },
+        {
+          label: "Weather UV Index",
+          data: series.weather,
+          borderColor: "#ffd447",
+          backgroundColor: "rgba(255, 212, 71, 0.12)",
+          tension: 0.42,
+          fill: false,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          spanGaps: false,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          labels: {
+            color: "#d8e6f7",
+            boxWidth: 12,
+            usePointStyle: true,
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: "#afc2da" },
+          grid: { color: "rgba(255,255,255,0.06)" },
+        },
+        y: {
+          min: 0,
+          max: 12,
+          ticks: { color: "#afc2da", stepSize: 2 },
+          grid: { color: "rgba(255,255,255,0.08)" },
+        },
+      },
+    },
+  });
+}
+
+function renderForecast(forecast = []) {
+  const grid = document.getElementById("forecastGrid");
+  if (!grid) return;
+
+  if (!forecast.length) {
+    grid.innerHTML = `
+      <article class="forecast-card">
+        <span>Forecast</span>
+        <strong>Weather unavailable</strong>
+        <div class="forecast-visual cloudy" aria-hidden="true"></div>
+        <strong>--</strong>
+        <small>No live forecast</small>
+      </article>
+    `;
+    return;
+  }
+
+  grid.innerHTML = forecast.slice(0, 7).map((item) => {
+    const mode = weatherMode(item.condition, "Day");
+    return `
+      <article class="forecast-card">
+        <span>${formatDateLabel(item.date).split(",")[0]}</span>
+        <strong>${formatDateLabel(item.date)}</strong>
+        <div class="forecast-visual ${mode}" aria-hidden="true"></div>
+        <strong>${formatTemperature(item.temperature_max_c)} / ${formatTemperature(item.temperature_min_c)}</strong>
+        <small>UV: ${formatUv(item.uv_index_max)}</small>
+      </article>
+    `;
+  }).join("");
+}
+
+function updateRecommendations(risk) {
+  const list = document.getElementById("recommendationList");
+  if (!list) return;
+  const guidance = {
+    Low: ["Outdoor activity is comfortable.", "Keep hydration nearby.", "Use eye comfort measures when glare is present."],
+    Moderate: ["Use sunscreen SPF 30+.", "Wear sunglasses outdoors.", "Stay hydrated.", "Avoid direct sun from 12 PM to 3 PM."],
+    High: ["Use sunscreen SPF 30+.", "Wear sunglasses and a hat.", "Prefer shade during peak daylight.", "Reduce prolonged direct exposure."],
+    "Very High": ["Seek shade during peak hours.", "Use broad sun protection.", "Limit unnecessary direct exposure.", "Recheck conditions before outdoor work."],
+    Extreme: ["Minimize direct exposure.", "Use comprehensive protection.", "Schedule outdoor tasks outside peak daylight.", "Follow local safety advice."],
+    Unavailable: ["Weather UV is unavailable.", "Use local brightness as a temporary estimate.", "Reconnect live weather before making weather-based decisions."],
+  };
+  list.innerHTML = (guidance[risk] || guidance.Unavailable).map((item) => `<li>${item}</li>`).join("");
+}
+
+function updateDashboard(model) {
+  const risk = uvRisk(model.estimated_uv);
+  const comparison = deriveComparison(model, risk);
+  const updatedAt = new Date();
+
+  text("locationLabel", model.location);
+  text("temperatureLabel", formatTemperature(model.temperature));
+  text("conditionLabel", model.condition);
+  text("humidityLabel", formatPercent(model.humidity));
+  text("windLabel", formatWind(model.wind));
+  text("cloudCoverLabel", formatPercent(model.cloud_cover));
+  text("sunriseLabel", formatTimeLabel(model.sunrise));
+  text("sunsetLabel", formatTimeLabel(model.sunset));
+  text("weatherSourceLabel", model.weather_source_label);
+  text("weatherApiNote", model.weather_note);
+
+  setGauge("estimated", model.estimated_uv);
+  setGauge("weather", model.weather_uv);
+  text(
+    "estimatedGaugeMessage",
+    model.weather_available
+      ? "Estimated from local brightness, daylight, cloud cover, and live weather UV."
+      : "Weather unavailable. Estimated from local brightness only."
+  );
+
+  text(["lux-value", "luxStatValue"], formatLux(model.lux));
+  text("luxBandLabel", luxBand(model.lux));
+  text(["risk-value", "riskStatValue"], risk);
+  text(["buzzer-value", "buzzerStatValue"], model.buzzer ? "ON" : "OFF");
+  text("buzzerStatNote", model.buzzer ? "Alert active" : "No alert");
+  text(["bluetooth-value", "bluetoothStatValue"], model.bluetooth);
+  text("bluetoothSignalText", model.bluetooth === "Connected" ? "Signal active" : "Awaiting BLE");
+  text("updatedStatValue", model.last_updated || updatedAt.toLocaleTimeString());
+  text("updatedStatDate", model.last_updated_date || updatedAt.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }));
+
+  text("heroBluetoothLabel", model.bluetooth);
+  text("sidebarBluetoothLabel", model.bluetooth);
+  text("sidebarBuzzerLabel", model.buzzer ? "ON" : "OFF");
+  text("deviceOnlineLabel", model.device_online || "Online");
+  text("sensorStateLabel", model.sensor_status || "Active");
+  text("oledStateLabel", model.oled_status || "Active");
+  text("lastSeenLabel", model.last_seen || "Recently");
+
+  text("comparisonWeather", model.condition);
+  text("comparisonDaylight", model.daylight);
+  text("comparisonExpected", comparison.expected);
+  text("comparisonEstimated", risk);
+  text("comparisonMessage", comparison.message);
+
+  if (document.getElementById("oled-lux")) {
+    text("oled-lux", `Lux: ${Math.round(safeNumber(model.lux))}`);
+    text("oled-risk", `UV Risk: ${risk.toUpperCase()}`);
+    text("oled-buzzer", `Buzzer: ${model.buzzer ? "ON" : "OFF"}`);
+    text("oled-ble", `BLE: ${model.bluetooth.toUpperCase()}`);
+  } else {
+    text(
+      "oledSimulation",
+      `Lux: ${Math.round(safeNumber(model.lux))}\nUV Risk: ${risk.toUpperCase()}\nBuzzer: ${model.buzzer ? "ON" : "OFF"}\nBLE: ${model.bluetooth.toUpperCase()}`
     );
-    const weather = await fetchWeather();
-    updateWeather(weather);
-  } catch (error) {
-    console.error("Dashboard refresh failed", error);
   }
+
+  updateRecommendations(risk);
+  applyHeroMode(model.condition, model.daylight);
+  renderForecast(model.forecast);
 }
 
-document.getElementById("refreshDashboardBtn").addEventListener("click", refreshDashboard);
-document.getElementById("connectBluetoothBtn").addEventListener("click", connectBluetooth);
-document.getElementById("disconnectBluetoothBtn").addEventListener("click", disconnectBluetooth);
-document.getElementById("useLocationBtn").addEventListener("click", useCurrentLocation);
-document.getElementById("locationSearch").addEventListener("change", (event) => {
-  activeLocation = event.target.value.trim() || "Perth, Australia";
-  activeCoordinates = null;
-  refreshDashboard();
+async function getJson(path) {
+  const response = await fetch(path);
+  if (!response.ok) throw new Error(`Request failed for ${path}`);
+  return response.json();
+}
+
+function mergeDeviceState(model, deviceStatus) {
+  if (!deviceStatus) return model;
+  const connected = String(deviceStatus.ble_status || "").toLowerCase() === "connected";
+  return {
+    ...model,
+    bluetooth: connected ? "Connected" : titleCase(deviceStatus.ble_status || "Disconnected"),
+    device_online: titleCase(deviceStatus.online || "online"),
+    sensor_status: titleCase(deviceStatus.sensor_status || "active"),
+    oled_status: titleCase(deviceStatus.oled_status || "active"),
+    buzzer: String(deviceStatus.buzzer_status || "").toUpperCase() === "ON" || model.buzzer,
+    last_seen: deviceStatus.last_seen ? "Recently updated" : model.last_seen,
+  };
+}
+
+async function loadDashboard() {
+  setClock();
+
+  const [currentResult, weatherResult, historyResult, deviceResult] =
+    await Promise.allSettled([
+      getJson("/api/readings/latest"),
+      getJson("/api/weather"),
+      getJson("/api/history"),
+      getJson("/api/device-status"),
+    ]);
+
+  const weather =
+    weatherResult.status === "fulfilled"
+      ? climateSummary(weatherResult.value)
+      : climateSummary({ source: "unavailable", status: "error", note: "Weather unavailable" });
+  const current = currentResult.status === "fulfilled" && currentResult.value ? currentResult.value : {};
+  const lux = safeNumber(current.lux);
+  const weatherUv = weather.weather_uv;
+  const estimatedUv = estimateUvFromEnvironment(lux, weatherUv, weather.daylight, weather.cloud_cover);
+  const currentTimestamp = current.timestamp ? new Date(current.timestamp) : new Date();
+  let model = {
+    ...DASHBOARD_DEFAULTS,
+    lux,
+    estimated_uv: estimatedUv,
+    weather_uv: weatherUv,
+    risk: uvRisk(estimatedUv),
+    buzzer: String(current.buzzer || "").toUpperCase() === "ON",
+    bluetooth: titleCase(current.ble_status || DASHBOARD_DEFAULTS.bluetooth),
+    condition: weather.condition,
+    daylight: weather.daylight,
+    location: weather.location,
+    cloud_cover: weather.cloud_cover,
+    temperature: weather.temperature,
+    humidity: weather.humidity,
+    wind: weather.wind,
+    sunrise: weather.sunrise,
+    sunset: weather.sunset,
+    weather_available: weather.available,
+    weather_source_label: weather.source_label,
+    weather_note: weather.note,
+    forecast: weather.forecast,
+    last_updated: currentTimestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+    last_updated_date: currentTimestamp.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }),
+  };
+
+  if (deviceResult.status === "fulfilled") {
+    model = mergeDeviceState(model, deviceResult.value);
+  }
+
+  updateDashboard(model);
+  const historyRows = historyResult.status === "fulfilled" ? historyResult.value : [];
+  renderTrendChart(buildTrendSeries(historyRows, estimatedUv, weatherUv, weather.daylight, weather.cloud_cover));
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const btn = document.getElementById("connectBluetoothBtn");
+
+  if (btn) {
+    btn.addEventListener("click", connectBluetooth);
+  }
+
+  loadDashboard().catch((error) => {
+    console.error("Dashboard data load failed", error);
+    const model = {
+      ...DASHBOARD_DEFAULTS,
+      estimated_uv: estimateUvFromEnvironment(DASHBOARD_DEFAULTS.lux, null, "Unknown", null),
+    };
+    updateDashboard(model);
+    renderTrendChart(buildTrendSeries([], model.estimated_uv, null, "Unknown", null));
+  });
+  setInterval(setClock, 30000);
 });
-document.getElementById("ingestKeyInput").value = localStorage.getItem("lightSensorIngestKey") || "";
-document.getElementById("locationSearch").value = activeLocation;
-refreshDashboard();
-setInterval(refreshDashboard, 30000);
-window.addEventListener("resize", () => refreshDashboard());
+
+window.connectBluetooth = connectBluetooth;

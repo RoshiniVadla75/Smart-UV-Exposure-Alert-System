@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Device Status</p>
+    <h1>ESP32 hardware state</h1>
+    <p>Bluetooth connection, sensor activity, OLED state, buzzer status, and ESP32 uptime.</p>
+  </div>
+</section>
+
+<section class="metric-grid">
+  <article class="metric-card"><span>BLE Status</span><strong>Connected</strong></article>
+  <article class="metric-card"><span>Sensor Status</span><strong>Active</strong></article>
+  <article class="metric-card"><span>OLED Status</span><strong>Active</strong></article>
+  <article class="metric-card"><span>Buzzer</span><strong>OFF</strong></article>
+</section>
+
+<section class="panel">
+  <h2>Hardware Notes</h2>
+  <p class="info-copy">The ESP32 sends readings through Bluetooth Low Energy. No WiFi hardware data path is required for this dashboard.</p>
+</section>
+{% endblock %}

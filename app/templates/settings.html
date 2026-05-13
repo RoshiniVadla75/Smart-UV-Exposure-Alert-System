@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Settings</p>
+    <h1>System configuration</h1>
+    <p>Configure Bluetooth behavior, VEML6030 calibration, estimated UV logic, buzzer thresholds, display theme, and demo mode.</p>
+  </div>
+</section>
+
+<section class="settings-grid">
+  <article class="panel form-card">
+    <h2>Bluetooth Connection</h2>
+    <label>Preferred Device Name
+      <input type="text" value="ESP32-VEML6030" />
+    </label>
+    <label>Service UUID
+      <input type="text" value="12345678-1234-1234-1234-1234567890ab" />
+    </label>
+    <label>Characteristic UUID
+      <input type="text" value="abcd1234-5678-90ab-cdef-1234567890ab" />
+    </label>
+  </article>
+
+  <article class="panel form-card">
+    <h2>Sensor Calibration</h2>
+    <label>Lux Scaling Factor
+      <input type="number" value="1.00" step="0.05" />
+    </label>
+    <label>Sampling Interval
+      <input type="number" value="5" min="1" /> seconds
+    </label>
+    <label>Weather UV Baseline
+      <input type="number" value="5" min="0" max="12" step="0.1" />
+    </label>
+  </article>
+
+  <article class="panel form-card">
+    <h2>Buzzer Thresholds</h2>
+    <label>Buzzer ON Threshold
+      <input type="number" value="8" min="0" max="12" step="0.1" />
+    </label>
+    <label class="form-row">Enable Buzzer
+      <input type="checkbox" checked />
+    </label>
+    <label class="form-row">Enable Demo Mode
+      <input type="checkbox" />
+    </label>
+  </article>
+
+  <article class="panel form-card">
+    <h2>Display Theme</h2>
+    <label>Dashboard Theme
+      <select>
+        <option>Premium Dark Weather</option>
+        <option>High Contrast</option>
+        <option>Compact Mobile</option>
+      </select>
+    </label>
+    <label>OLED Display Mode
+      <select>
+        <option>Lux + UV Risk</option>
+        <option>Lux Only</option>
+        <option>Alert Priority</option>
+      </select>
+    </label>
+  </article>
+</section>
+{% endblock %}

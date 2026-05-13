@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta
+import os
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
@@ -49,6 +49,8 @@ def _build_url(base_url, params):
 
 
 def _condition_label(code):
+    if code is None:
+        return "Weather unavailable"
     return WEATHER_CODE_LABELS.get(code, "Mixed Conditions")
 
 
@@ -57,31 +59,40 @@ def _location_label(location):
     return ", ".join(part for part in parts if part)
 
 
-def _safe_number(value, default=0):
-    if value is None:
-        return default
+def _float_or_none(value):
+    if value in (None, ""):
+        return None
     try:
         return float(value)
     except (TypeError, ValueError):
-        return default
+        return None
+
+
+def _first(values):
+    return values[0] if values else None
+
+
+def _normalize_location_name(location_name):
+    return (location_name or "Perth, Western Australia").strip()
 
 
 def _geocode_location(location_name, timeout):
-    if not location_name:
+    normalized = _normalize_location_name(location_name)
+    if normalized.lower() in {"perth", "perth, australia", "perth, western australia"}:
         return DEFAULT_LOCATION.copy()
 
     url = _build_url(
         "https://geocoding-api.open-meteo.com/v1/search",
-        {"name": location_name, "count": 1, "language": "en", "format": "json"},
+        {"name": normalized, "count": 1, "language": "en", "format": "json"},
     )
     data = _get_json(url, timeout)
     results = data.get("results") or []
     if not results:
-        raise ValueError(f"No weather location found for '{location_name}'.")
+        raise ValueError(f"No weather location found for '{normalized}'.")
 
     result = results[0]
     return {
-        "name": result.get("name", location_name),
+        "name": result.get("name", normalized),
         "admin1": result.get("admin1", ""),
         "country": result.get("country", ""),
         "latitude": result["latitude"],
@@ -101,6 +112,20 @@ def _location_from_coordinates(location_name, latitude, longitude):
     }
 
 
+def _value_at(values, index):
+    if not values or index < 0 or index >= len(values):
+        return None
+    return values[index]
+
+
+def _nearest_hour_index(times, current_time):
+    if not times:
+        return 0
+    if not current_time:
+        return 0
+    return next((idx for idx, value in enumerate(times) if value >= current_time), 0)
+
+
 def _hourly_slice(weather_data):
     hourly = weather_data.get("hourly") or {}
     times = hourly.get("time") or []
@@ -108,203 +133,280 @@ def _hourly_slice(weather_data):
         return []
 
     current_time = (weather_data.get("current") or {}).get("time")
-    start_index = 0
-    if current_time:
-        start_index = next((idx for idx, value in enumerate(times) if value >= current_time), 0)
-
+    start_index = _nearest_hour_index(times, current_time)
     rows = []
     for idx in range(start_index, min(start_index + 12, len(times))):
-        code = hourly.get("weather_code", [None] * len(times))[idx]
+        code = _value_at(hourly.get("weather_code"), idx)
         rows.append(
             {
                 "time": times[idx],
-                "temperature_c": hourly.get("temperature_2m", [None] * len(times))[idx],
-                "humidity_percent": hourly.get("relative_humidity_2m", [None] * len(times))[idx],
-                "precipitation_probability_percent": hourly.get(
-                    "precipitation_probability", [None] * len(times)
-                )[idx],
-                "precipitation_mm": hourly.get("precipitation", [None] * len(times))[idx],
-                "cloud_cover_percent": hourly.get("cloud_cover", [None] * len(times))[idx],
-                "wind_speed_kmh": hourly.get("wind_speed_10m", [None] * len(times))[idx],
-                "uv_index": hourly.get("uv_index", [None] * len(times))[idx],
-                "shortwave_radiation_w_m2": hourly.get(
-                    "shortwave_radiation", [None] * len(times)
-                )[idx],
+                "temperature_c": _value_at(hourly.get("temperature_2m"), idx),
+                "humidity_percent": _value_at(hourly.get("relative_humidity_2m"), idx),
+                "wind_speed_kmh": _value_at(hourly.get("wind_speed_10m"), idx),
+                "cloud_cover_percent": _value_at(hourly.get("cloud_cover"), idx),
+                "uv_index": _value_at(hourly.get("uv_index"), idx),
+                "precipitation_probability_percent": _value_at(
+                    hourly.get("precipitation_probability"), idx
+                ),
+                "precipitation_mm": _value_at(hourly.get("precipitation"), idx),
                 "weather_code": code,
                 "condition": _condition_label(code),
+                "is_day": _value_at(hourly.get("is_day"), idx),
             }
         )
     return rows
 
 
-def _fallback_weather(location_name, reason):
-    location = DEFAULT_LOCATION.copy()
-    if location_name:
-        location["name"] = location_name
-
-    start = datetime.now().replace(minute=0, second=0, microsecond=0)
-    hourly = []
-    temperatures = [18, 19, 20, 22, 23, 24, 24, 23, 22, 20, 19, 18]
-    humidity = [65, 63, 58, 52, 48, 45, 44, 48, 53, 58, 61, 64]
-    clouds = [54, 48, 42, 34, 30, 28, 35, 44, 52, 58, 62, 68]
-    for idx in range(12):
-        code = 2 if clouds[idx] < 60 else 3
-        hourly.append(
+def _forecast_from_open_meteo(weather_data):
+    daily = weather_data.get("daily") or {}
+    dates = daily.get("time") or []
+    forecast = []
+    for idx, date_value in enumerate(dates):
+        code = _value_at(daily.get("weather_code"), idx)
+        forecast.append(
             {
-                "time": (start + timedelta(hours=idx)).isoformat(timespec="minutes"),
-                "temperature_c": temperatures[idx],
-                "humidity_percent": humidity[idx],
-                "precipitation_probability_percent": 18 + (idx % 4) * 7,
-                "precipitation_mm": 0.1 if idx in (5, 6, 7) else 0,
-                "cloud_cover_percent": clouds[idx],
-                "wind_speed_kmh": 10 + idx % 5,
-                "uv_index": max(0, 7 - abs(5 - idx)),
-                "shortwave_radiation_w_m2": max(0, 720 - clouds[idx] * 7),
-                "weather_code": code,
+                "date": date_value,
                 "condition": _condition_label(code),
+                "weather_code": code,
+                "temperature_max_c": _value_at(daily.get("temperature_2m_max"), idx),
+                "temperature_min_c": _value_at(daily.get("temperature_2m_min"), idx),
+                "uv_index_max": _value_at(daily.get("uv_index_max"), idx),
+                "precipitation_sum_mm": _value_at(daily.get("precipitation_sum"), idx),
+                "sunrise": _value_at(daily.get("sunrise"), idx),
+                "sunset": _value_at(daily.get("sunset"), idx),
             }
         )
+    return forecast
 
+
+def _current_hour_values(weather_data):
+    hourly = weather_data.get("hourly") or {}
+    times = hourly.get("time") or []
+    idx = _nearest_hour_index(times, (weather_data.get("current") or {}).get("time"))
     return {
-        "source": "fallback",
-        "status": "degraded",
-        "message": reason,
-        "location": {**location, "label": _location_label(location)},
-        "current": {
-            "temperature_c": 23,
-            "apparent_temperature_c": 22,
-            "humidity_percent": 48,
-            "precipitation_mm": 0.1,
-            "cloud_cover_percent": 35,
-            "wind_speed_kmh": 13,
-            "wind_direction_degrees": 248,
-            "wind_gust_kmh": 24,
-            "weather_code": 2,
-            "condition": _condition_label(2),
-            "is_day": 1,
-            "uv_index": 6.8,
-            "shortwave_radiation_w_m2": 475,
-            "aqi": 42,
-            "pm2_5": 7.6,
-        },
-        "daily": {
-            "precipitation_sum_mm": 0.8,
-            "uv_index_max": 7.1,
-            "sunrise": None,
-            "sunset": None,
-        },
-        "hourly": hourly,
+        "uv_index": _value_at(hourly.get("uv_index"), idx),
+        "humidity_percent": _value_at(hourly.get("relative_humidity_2m"), idx),
+        "wind_speed_kmh": _value_at(hourly.get("wind_speed_10m"), idx),
     }
 
 
-def fetch_weather_summary(location_name=None, timeout=4, latitude=None, longitude=None):
+def _unavailable_weather(location_name, reason):
+    location = DEFAULT_LOCATION.copy()
+    if location_name:
+        location["name"] = location_name
+    return {
+        "source": "unavailable",
+        "source_label": "Weather unavailable",
+        "status": "error",
+        "note": reason,
+        "location": {**location, "label": _location_label(location)},
+        "current": {
+            "temperature_c": None,
+            "humidity_percent": None,
+            "wind_speed_kmh": None,
+            "cloud_cover_percent": None,
+            "uv_index": None,
+            "precipitation_mm": None,
+            "rain_mm": None,
+            "weather_code": None,
+            "condition": "Weather unavailable",
+            "is_day": None,
+        },
+        "daily": {
+            "uv_index_max": None,
+            "precipitation_sum_mm": None,
+            "sunrise": None,
+            "sunset": None,
+        },
+        "hourly": [],
+        "forecast": [],
+    }
+
+
+def _fetch_open_meteo(location_name, timeout, latitude=None, longitude=None):
+    if latitude is not None and longitude is not None:
+        location = _location_from_coordinates(location_name, latitude, longitude)
+    else:
+        location = _geocode_location(location_name, timeout)
+
+    weather_url = _build_url(
+        "https://api.open-meteo.com/v1/forecast",
+        {
+            "latitude": location["latitude"],
+            "longitude": location["longitude"],
+            "current": ",".join(
+                [
+                    "temperature_2m",
+                    "relative_humidity_2m",
+                    "is_day",
+                    "precipitation",
+                    "rain",
+                    "weather_code",
+                    "cloud_cover",
+                    "wind_speed_10m",
+                ]
+            ),
+            "hourly": ",".join(
+                [
+                    "temperature_2m",
+                    "relative_humidity_2m",
+                    "wind_speed_10m",
+                    "cloud_cover",
+                    "weather_code",
+                    "is_day",
+                    "precipitation_probability",
+                    "precipitation",
+                    "uv_index",
+                ]
+            ),
+            "daily": ",".join(
+                [
+                    "weather_code",
+                    "temperature_2m_max",
+                    "temperature_2m_min",
+                    "uv_index_max",
+                    "precipitation_sum",
+                    "sunrise",
+                    "sunset",
+                ]
+            ),
+            "forecast_days": 7,
+            "timezone": location.get("timezone") or "auto",
+            "wind_speed_unit": "kmh",
+            "precipitation_unit": "mm",
+        },
+    )
+    weather_data = _get_json(weather_url, timeout)
+    current = weather_data.get("current") or {}
+    daily = weather_data.get("daily") or {}
+    hour_values = _current_hour_values(weather_data)
+    weather_code = current.get("weather_code")
+
+    return {
+        "source": "open-meteo",
+        "source_label": "Live weather",
+        "status": "ok",
+        "note": "Live weather from Open-Meteo",
+        "location": {**location, "label": _location_label(location)},
+        "current": {
+            "time": current.get("time"),
+            "temperature_c": current.get("temperature_2m"),
+            "humidity_percent": current.get("relative_humidity_2m")
+            or hour_values.get("humidity_percent"),
+            "wind_speed_kmh": current.get("wind_speed_10m") or hour_values.get("wind_speed_kmh"),
+            "cloud_cover_percent": current.get("cloud_cover"),
+            "uv_index": hour_values.get("uv_index"),
+            "precipitation_mm": current.get("precipitation"),
+            "rain_mm": current.get("rain"),
+            "weather_code": weather_code,
+            "condition": _condition_label(weather_code),
+            "is_day": current.get("is_day"),
+        },
+        "daily": {
+            "uv_index_max": _first(daily.get("uv_index_max") or []),
+            "precipitation_sum_mm": _first(daily.get("precipitation_sum") or []),
+            "sunrise": _first(daily.get("sunrise") or []),
+            "sunset": _first(daily.get("sunset") or []),
+        },
+        "hourly": _hourly_slice(weather_data),
+        "forecast": _forecast_from_open_meteo(weather_data),
+    }
+
+
+def _forecast_from_weatherapi(data):
+    forecast_days = ((data.get("forecast") or {}).get("forecastday")) or []
+    rows = []
+    for item in forecast_days:
+        day = item.get("day") or {}
+        astro = item.get("astro") or {}
+        condition = (day.get("condition") or {}).get("text") or "Mixed Conditions"
+        rows.append(
+            {
+                "date": item.get("date"),
+                "condition": condition,
+                "weather_code": None,
+                "temperature_max_c": _float_or_none(day.get("maxtemp_c")),
+                "temperature_min_c": _float_or_none(day.get("mintemp_c")),
+                "uv_index_max": _float_or_none(day.get("uv")),
+                "precipitation_sum_mm": _float_or_none(day.get("totalprecip_mm")),
+                "sunrise": astro.get("sunrise"),
+                "sunset": astro.get("sunset"),
+            }
+        )
+    return rows
+
+
+def _fetch_weatherapi(api_key, location_name, timeout, latitude=None, longitude=None):
+    location_query = (
+        f"{latitude},{longitude}"
+        if latitude is not None and longitude is not None
+        else _normalize_location_name(location_name)
+    )
+    url = _build_url(
+        "https://api.weatherapi.com/v1/forecast.json",
+        {"key": api_key, "q": location_query, "days": 7, "aqi": "no", "alerts": "no"},
+    )
+    data = _get_json(url, timeout)
+    location = data.get("location") or {}
+    current = data.get("current") or {}
+    condition = (current.get("condition") or {}).get("text") or "Mixed Conditions"
+    forecast = _forecast_from_weatherapi(data)
+    today = forecast[0] if forecast else {}
+    location_payload = {
+        "name": location.get("name") or _normalize_location_name(location_name),
+        "admin1": location.get("region") or "",
+        "country": location.get("country") or "",
+        "latitude": _float_or_none(location.get("lat")),
+        "longitude": _float_or_none(location.get("lon")),
+        "timezone": location.get("tz_id") or "Australia/Perth",
+    }
+
+    return {
+        "source": "weatherapi",
+        "source_label": "Live weather",
+        "status": "ok",
+        "note": "Live weather from WeatherAPI",
+        "location": {**location_payload, "label": _location_label(location_payload)},
+        "current": {
+            "time": current.get("last_updated"),
+            "temperature_c": _float_or_none(current.get("temp_c")),
+            "humidity_percent": _float_or_none(current.get("humidity")),
+            "wind_speed_kmh": _float_or_none(current.get("wind_kph")),
+            "cloud_cover_percent": _float_or_none(current.get("cloud")),
+            "uv_index": _float_or_none(current.get("uv")),
+            "precipitation_mm": _float_or_none(current.get("precip_mm")),
+            "rain_mm": _float_or_none(current.get("precip_mm")),
+            "weather_code": None,
+            "condition": condition,
+            "is_day": current.get("is_day"),
+        },
+        "daily": {
+            "uv_index_max": today.get("uv_index_max"),
+            "precipitation_sum_mm": today.get("precipitation_sum_mm"),
+            "sunrise": today.get("sunrise"),
+            "sunset": today.get("sunset"),
+        },
+        "hourly": [],
+        "forecast": forecast,
+    }
+
+
+def fetch_weather_summary(
+    location_name=None,
+    timeout=4,
+    latitude=None,
+    longitude=None,
+    api_key=None,
+):
+    api_key = api_key or os.getenv("WEATHER_API_KEY", "")
     try:
-        if latitude is not None and longitude is not None:
-            location = _location_from_coordinates(location_name, latitude, longitude)
-        else:
-            location = _geocode_location(location_name, timeout)
-        latitude = location["latitude"]
-        longitude = location["longitude"]
-        timezone = location.get("timezone") or "auto"
-
-        weather_url = _build_url(
-            "https://api.open-meteo.com/v1/forecast",
-            {
-                "latitude": latitude,
-                "longitude": longitude,
-                "current": ",".join(
-                    [
-                        "temperature_2m",
-                        "relative_humidity_2m",
-                        "apparent_temperature",
-                        "is_day",
-                        "precipitation",
-                        "rain",
-                        "weather_code",
-                        "cloud_cover",
-                        "wind_speed_10m",
-                        "wind_direction_10m",
-                        "wind_gusts_10m",
-                        "shortwave_radiation",
-                    ]
-                ),
-                "hourly": ",".join(
-                    [
-                        "temperature_2m",
-                        "relative_humidity_2m",
-                        "precipitation_probability",
-                        "precipitation",
-                        "cloud_cover",
-                        "weather_code",
-                        "wind_speed_10m",
-                        "uv_index",
-                        "shortwave_radiation",
-                    ]
-                ),
-                "daily": "uv_index_max,precipitation_sum,sunrise,sunset",
-                "forecast_days": 2,
-                "timezone": timezone,
-                "wind_speed_unit": "kmh",
-                "precipitation_unit": "mm",
-                "temperature_unit": "celsius",
-            },
-        )
-        weather_data = _get_json(weather_url, timeout)
-
-        air_url = _build_url(
-            "https://air-quality-api.open-meteo.com/v1/air-quality",
-            {
-                "latitude": latitude,
-                "longitude": longitude,
-                "current": "us_aqi,pm2_5,uv_index",
-                "hourly": "us_aqi,pm2_5,uv_index",
-                "forecast_hours": 12,
-                "timezone": timezone,
-            },
-        )
-        air_data = _get_json(air_url, timeout)
-        current = weather_data.get("current") or {}
-        daily = weather_data.get("daily") or {}
-        air_current = air_data.get("current") or {}
-        hourly = weather_data.get("hourly") or {}
-        weather_code = current.get("weather_code")
-        current_shortwave = current.get("shortwave_radiation")
-        if current_shortwave is None:
-            hourly_shortwave = hourly.get("shortwave_radiation") or []
-            current_shortwave = hourly_shortwave[0] if hourly_shortwave else None
-
-        return {
-            "source": "open-meteo",
-            "status": "ok",
-            "message": "",
-            "location": {**location, "label": _location_label(location)},
-            "current": {
-                "temperature_c": current.get("temperature_2m"),
-                "apparent_temperature_c": current.get("apparent_temperature"),
-                "humidity_percent": current.get("relative_humidity_2m"),
-                "precipitation_mm": current.get("precipitation"),
-                "cloud_cover_percent": current.get("cloud_cover"),
-                "wind_speed_kmh": current.get("wind_speed_10m"),
-                "wind_direction_degrees": current.get("wind_direction_10m"),
-                "wind_gust_kmh": current.get("wind_gusts_10m"),
-                "weather_code": weather_code,
-                "condition": _condition_label(weather_code),
-                "is_day": current.get("is_day"),
-                "uv_index": air_current.get("uv_index")
-                or (daily.get("uv_index_max") or [None])[0],
-                "shortwave_radiation_w_m2": current_shortwave,
-                "aqi": air_current.get("us_aqi"),
-                "pm2_5": air_current.get("pm2_5"),
-            },
-            "daily": {
-                "precipitation_sum_mm": (daily.get("precipitation_sum") or [None])[0],
-                "uv_index_max": (daily.get("uv_index_max") or [None])[0],
-                "sunrise": (daily.get("sunrise") or [None])[0],
-                "sunset": (daily.get("sunset") or [None])[0],
-            },
-            "hourly": _hourly_slice(weather_data),
-        }
+        if api_key:
+            try:
+                return _fetch_weatherapi(api_key, location_name, timeout, latitude, longitude)
+            except (HTTPError, URLError, TimeoutError, OSError, KeyError, json.JSONDecodeError):
+                return _fetch_open_meteo(location_name, timeout, latitude, longitude)
+        return _fetch_open_meteo(location_name, timeout, latitude, longitude)
     except ValueError:
         raise
     except (HTTPError, URLError, TimeoutError, OSError, KeyError, json.JSONDecodeError) as err:
-        return _fallback_weather(location_name, f"Weather API unavailable: {err}")
+        return _unavailable_weather(location_name, f"Weather unavailable: {err}")

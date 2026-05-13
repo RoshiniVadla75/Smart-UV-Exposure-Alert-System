@@ -18,6 +18,7 @@ def create_app(test_config=None):
         RATE_LIMIT_WINDOW_SECONDS=int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")),
         RATE_LIMIT_MAX_REQUESTS=int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "120")),
         DEFAULT_WEATHER_LOCATION=os.getenv("DEFAULT_WEATHER_LOCATION", "Perth, Australia"),
+        WEATHER_API_KEY=os.getenv("WEATHER_API_KEY", ""),
         WEATHER_API_TIMEOUT_SECONDS=float(os.getenv("WEATHER_API_TIMEOUT_SECONDS", "4")),
     )
 
@@ -66,7 +67,7 @@ def create_app(test_config=None):
         )
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self'; "
+            "script-src 'self' https://cdn.jsdelivr.net; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; "
             "connect-src 'self'; "

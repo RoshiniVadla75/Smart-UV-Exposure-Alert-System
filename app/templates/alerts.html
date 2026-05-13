@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Alerts</p>
+    <h1>System alerts</h1>
+    <p>Darkness, excessive night brightness, buzzer activation, and sudden light-drop events.</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="data-table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr><th>Time</th><th>Lux</th><th>Alert Type</th><th>Message</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Today</td><td>8 lux</td><td>Darkness</td><td>Very dark ambient light detected.</td></tr>
+        <tr><td>Today</td><td>18 lux</td><td>Buzzer Activation</td><td>Buzzer warning active for poor visibility.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -3,17 +3,67 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>VEML6030 Light Sensor Monitor</title>
+    <title>SMART UV EXPOSURE ALERT SYSTEM</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}" />
   </head>
-  <body class="{% block body_class %}{% endblock %}">
-    <header class="header">
-      <h1>VEML6030 Light Sensor Monitor</h1>
-      <nav>
-        <a href="/">Dashboard</a>
-      </nav>
-    </header>
-    <main class="container">{% block content %}{% endblock %}</main>
+  <body class="app-body {% block body_class %}{% endblock %}">
+    {% set nav_items = [
+      ("/", "Dashboard"),
+      ("/live-data", "Live Data"),
+      ("/history", "History & Trends"),
+      ("/weather-comparison", "Weather Comparison"),
+      ("/alerts", "Alerts"),
+      ("/devices", "Device Status"),
+      ("/settings", "Settings"),
+      ("/how-it-works", "How It Works"),
+      ("/about", "About Project")
+    ] %}
+
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar" aria-label="Application navigation">
+        <div class="brand-lockup">
+          <span class="brand-sun" aria-hidden="true"></span>
+          <div>
+            <strong>SMART UV EXPOSURE ALERT SYSTEM</strong>
+            <span>Environmental Safety System</span>
+          </div>
+        </div>
+
+        <nav class="sidebar-nav" aria-label="Primary navigation">
+          {% for href, label in nav_items %}
+            <a href="{{ href }}" class="nav-link {% if request.path == href %}active{% endif %}">{{ label }}</a>
+          {% endfor %}
+        </nav>
+
+        <section class="sidebar-card device-summary">
+          <p class="sidebar-label">Device Summary</p>
+          <div><span>ESP32</span><strong id="deviceOnlineLabel">Online</strong></div>
+          <div><span>Sensor VEML6030</span><strong id="sensorStateLabel">Active</strong></div>
+          <div><span>OLED Display</span><strong id="oledStateLabel">Active</strong></div>
+          <div><span>Buzzer</span><strong id="sidebarBuzzerLabel">OFF</strong></div>
+          <div><span>Bluetooth</span><strong id="sidebarBluetoothLabel">Connected</strong></div>
+          <div><span>Last Seen</span><strong id="lastSeenLabel">2 sec ago</strong></div>
+        </section>
+      </aside>
+
+      <div class="sidebar-overlay" id="sidebarOverlay" hidden></div>
+
+      <div class="mobile-topbar">
+        <button class="menu-toggle" id="sidebarToggle" type="button" aria-controls="sidebar" aria-expanded="false">
+          <span></span><span></span><span></span>
+        </button>
+        <div>
+          <strong>SMART UV EXPOSURE ALERT SYSTEM</strong>
+          <span>Lux-based UV risk dashboard</span>
+        </div>
+        <span class="mobile-ble-status" id="mobileBluetoothLabel">BLE</span>
+      </div>
+
+      <main class="main-content">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
     {% block scripts %}{% endblock %}
   </body>

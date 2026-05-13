@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">About Project</p>
+    <h1>SMART UV EXPOSURE ALERT SYSTEM</h1>
+    <p>A capstone-style environmental safety dashboard combining ESP32 Bluetooth data, VEML6030 local brightness readings, weather UV context, and alert recommendations.</p>
+  </div>
+</section>
+
+<section class="card-grid">
+  <article class="panel">
+    <h2>Hardware</h2>
+    <ul class="clean-list">
+      <li>ESP32 development board</li>
+      <li>VEML6030 ambient visible light sensor</li>
+      <li>OLED display</li>
+      <li>RGB LEDs and buzzer</li>
+      <li>Bluetooth Low Energy communication</li>
+    </ul>
+  </article>
+  <article class="panel">
+    <h2>Important Sensor Note</h2>
+    <p class="info-copy">The VEML6030 measures ambient brightness in lux. It does not directly measure UV. The dashboard estimates UV risk by combining lux trends with weather UV and daylight data.</p>
+  </article>
+  <article class="panel">
+    <h2>Purpose</h2>
+    <p class="info-copy">The system helps demonstrate local environmental monitoring, real-time device feedback, and weather-aware safety recommendations without WiFi hardware communication.</p>
+  </article>
+</section>
+{% endblock %}

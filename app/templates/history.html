@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">History & Trends</p>
+    <h1>Brightness and estimated UV trends</h1>
+    <p>Review stored lux readings, estimated UV risk, low-light duration, and alert history.</p>
+  </div>
+</section>
+
+<section class="metric-grid">
+  <article class="metric-card"><span>Daily Average Brightness</span><strong>9,840 lux</strong></article>
+  <article class="metric-card"><span>Peak Estimated UV</span><strong>7.2</strong></article>
+  <article class="metric-card"><span>Low-light Duration</span><strong>42 min</strong></article>
+  <article class="metric-card"><span>Trend</span><strong>Stable</strong></article>
+</section>
+
+<section class="panel">
+  <h2>Historical analysis</h2>
+  <p class="info-copy">Charts and downloadable reports can be connected to the existing `/api/history` and `/api/export/readings.csv` endpoints.</p>
+</section>
+{% endblock %}
