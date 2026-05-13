@@ -1,4 +1,11 @@
 let uvTrendChart = null;
+let bleDevice = null;
+let bleCharacteristic = null;
+let blePacketBuffer = "";
+
+const BLE_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const BLE_NOTIFY_CHARACTERISTIC_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+const BLE_DECODER = new TextDecoder("utf-8");
 
 const DASHBOARD_DEFAULTS = {
   lux: 0,
@@ -58,6 +65,13 @@ function uvRisk(value) {
   if (score <= 7) return "High";
   if (score <= 10) return "Very High";
   return "Extreme";
+}
+
+function activeBuzzer(value) {
+  if (typeof value === "string") {
+    return ["1", "true", "yes", "on", "beep"].includes(value.trim().toLowerCase());
+  }
+  return Boolean(value);
 }
 
 function luxBand(lux) {
@@ -208,26 +222,154 @@ function setGauge(prefix, value) {
   }
 }
 
+function isLocalHost() {
+  return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
+function explainBluetoothAvailability() {
+  if (!window.isSecureContext && !isLocalHost()) {
+    const origin = window.location.origin;
+    return [
+      "Bluetooth is blocked because this page is not opened from a secure origin.",
+      "Open http://localhost:5000 on this same computer, or use HTTPS for the 192.168.x.x address.",
+      `For quick testing in Chrome, add ${origin} under chrome://flags/#unsafely-treat-insecure-origin-as-secure and relaunch Chrome.`,
+    ].join("\n");
+  }
+  if (!navigator.bluetooth) {
+    return "Web Bluetooth is not available here. Use desktop Chrome or Edge, enable Bluetooth in Windows, and avoid Incognito/private windows.";
+  }
+  return "";
+}
+
+function parseBlePacket(packet) {
+  const rawPacket = String(packet || "").trim();
+  if (!rawPacket) return null;
+
+  let parsed = {};
+  if (rawPacket.startsWith("{")) {
+    parsed = JSON.parse(rawPacket);
+  } else if (rawPacket.includes("=")) {
+    rawPacket.split(",").forEach((part) => {
+      const [key, ...rest] = part.split("=");
+      if (key && rest.length) parsed[key.trim()] = rest.join("=").trim();
+    });
+  } else {
+    const parts = rawPacket.split(",").map((part) => part.trim());
+    if (parts.length === 1) {
+      parsed = { device_id: bleDevice?.name || "ESP32-VEML6030", lux: parts[0] };
+    } else {
+      const [deviceId, lux, wifiSignal] = parts;
+      parsed = { device_id: deviceId, lux, wifi_signal: wifiSignal };
+    }
+  }
+
+  const lux = numberOrNull(parsed.lux);
+  if (lux === null) throw new Error(`BLE packet did not include a numeric lux value: ${rawPacket}`);
+
+  return {
+    device_id: parsed.device_id || parsed.device || bleDevice?.name || "ESP32-VEML6030",
+    lux,
+    wifi_signal: parsed.wifi_signal ?? parsed.rssi ?? null,
+    esp32_uptime_seconds: parsed.esp32_uptime_seconds ?? parsed.uptime ?? null,
+    raw_packet: rawPacket,
+    source: "hardware",
+    ble_status: "connected",
+    signal_active: true,
+  };
+}
+
+async function postBleReading(reading) {
+  const response = await fetch("/api/readings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(reading),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(result.error || "Could not save Bluetooth reading.");
+  }
+  return result.reading || reading;
+}
+
+async function postBleStatus(status, extra = {}) {
+  await fetch("/api/device-status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      device_id: bleDevice?.name || "ESP32-VEML6030",
+      ble_status: status,
+      signal_active: status === "connected",
+      ...extra,
+    }),
+  }).catch((error) => console.warn("Unable to update BLE status", error));
+}
+
+async function handleBlePacket(packet) {
+  const reading = parseBlePacket(packet);
+  if (!reading) return;
+  const savedReading = await postBleReading(reading);
+  updateDashboardFromBLE(savedReading);
+}
+
+function handleBleNotification(event) {
+  blePacketBuffer += BLE_DECODER.decode(event.target.value);
+  const packets = blePacketBuffer.split(/\r?\n/);
+  blePacketBuffer = packets.pop() || "";
+
+  packets.forEach((packet) => {
+    handleBlePacket(packet).catch((error) => {
+      console.error("BLE packet error:", error);
+      alert(error.message);
+    });
+  });
+}
+
+function handleBleDisconnect() {
+  bleDevice = null;
+  bleCharacteristic = null;
+  blePacketBuffer = "";
+  updateBluetoothStatus("Disconnected");
+  postBleStatus("disconnected");
+}
+
 async function connectBluetooth() {
   console.log("Bluetooth button clicked");
 
-  if (!navigator.bluetooth) {
-    alert("Web Bluetooth is not supported in this browser. Use Chrome or Edge.");
+  const availabilityMessage = explainBluetoothAvailability();
+  if (availabilityMessage) {
+    alert(availabilityMessage);
     return;
   }
 
   try {
+    updateBluetoothStatus("Pairing");
     const device = await navigator.bluetooth.requestDevice({
       acceptAllDevices: true,
-      optionalServices: ["12345678-1234-1234-1234-123456789abc"]
+      optionalServices: [BLE_SERVICE_UUID],
     });
 
-    console.log("Selected device:", device.name);
-    alert("Connected popup opened. Selected: " + device.name);
+    bleDevice = device;
+    bleDevice.addEventListener("gattserverdisconnected", handleBleDisconnect);
+
+    updateBluetoothStatus("Connecting");
+    const server = await bleDevice.gatt.connect();
+    const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+    bleCharacteristic = await service.getCharacteristic(BLE_NOTIFY_CHARACTERISTIC_UUID);
+    await bleCharacteristic.startNotifications();
+    bleCharacteristic.addEventListener("characteristicvaluechanged", handleBleNotification);
+
+    updateBluetoothStatus("Connected");
+    await postBleStatus("connected");
+    alert(`Bluetooth connected to ${device.name || "ESP32 device"}.`);
 
   } catch (error) {
     console.error("Bluetooth error:", error);
-    alert("Bluetooth failed: " + error.message);
+    updateBluetoothStatus("Disconnected");
+    const message =
+      error.name === "NotFoundError"
+        ? "Bluetooth pairing was cancelled. Click Connect Bluetooth again and choose your ESP32 device from the Chrome Bluetooth window."
+        : `Bluetooth failed: ${error.message}`;
+    alert(message);
   }
 }
 
@@ -237,7 +379,7 @@ function updateDashboardFromBLE(data) {
     estimateUvFromEnvironment(data.lux, null, "Unknown", null)
   );
   const risk = data.risk || uvRisk(estimatedUv);
-  const buzzerOn = Boolean(data.buzzer);
+  const buzzerOn = activeBuzzer(data.buzzer ?? data.buzzer_state);
 
   text(["lux-value", "luxStatValue"], formatLux(data.lux));
   text(["estimated-uv-value", "estimatedUvValue"], formatUv(estimatedUv));
