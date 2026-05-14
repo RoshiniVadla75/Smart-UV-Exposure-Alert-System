@@ -20,6 +20,8 @@ class BleGateway:
         self.client = None
         self.device_name = BLE_DEVICE_NAME
         self.device_address = None
+        self.device_address_type = None
+        self.discovered_devices = {}
         self.latest_payload = None
         self.packet_buffer = ""
         self.status = "disconnected"
@@ -27,23 +29,33 @@ class BleGateway:
 
     def scan(self, timeout=8):
         bleak = _load_bleak()
-        return asyncio.run(_scan_devices(bleak.BleakScanner, timeout=timeout))
+        devices, device_cache = asyncio.run(_scan_devices(bleak.BleakScanner, timeout=timeout))
+        with self.lock:
+            self.discovered_devices = device_cache
+        return devices
 
-    def connect(self, address, name=None):
+    def connect(self, address, name=None, address_type=None):
         if not address:
             raise ValueError("Bluetooth device address is required.")
 
         self.disconnect()
+        normalized_address = _normalize_address(address)
         with self.lock:
+            cached_device = self.discovered_devices.get(normalized_address, {})
+            connect_target = cached_device.get("device") or address
+            connect_address_type = _normalize_address_type(
+                address_type or cached_device.get("address_type")
+            )
             self.stop_event.clear()
             self.device_address = address
+            self.device_address_type = connect_address_type
             self.device_name = name or address
             self.status = "connecting"
             self.error = None
             self.packet_buffer = ""
             self.thread = threading.Thread(
                 target=self._thread_main,
-                args=(address,),
+                args=(connect_target, connect_address_type),
                 daemon=True,
                 name="ble-gateway",
             )
@@ -72,24 +84,26 @@ class BleGateway:
                 "status": self.status,
                 "device_name": self.device_name,
                 "device_address": self.device_address,
+                "device_address_type": self.device_address_type,
                 "error": self.error,
                 "connected": self.status == "connected",
                 "latest_payload": self.latest_payload,
             }
 
-    def _thread_main(self, address):
+    def _thread_main(self, connect_target, address_type):
         try:
-            asyncio.run(self._run_connection(address))
+            asyncio.run(self._run_connection(connect_target, address_type))
         except Exception as exc:  # noqa: BLE connection errors are surfaced to the UI.
             with self.lock:
                 self.status = "failed"
                 self.error = str(exc)
             self._update_device_status("failed", signal_active=False)
 
-    async def _run_connection(self, address):
+    async def _run_connection(self, connect_target, address_type):
         bleak = _load_bleak()
 
-        async with bleak.BleakClient(address) as client:
+        client = await _connect_ble_client(bleak, connect_target, self.device_address, address_type)
+        try:
             with self.lock:
                 self.client = client
                 self.status = "connected"
@@ -106,6 +120,9 @@ class BleGateway:
 
             if client.is_connected:
                 await client.stop_notify(BLE_NOTIFY_CHARACTERISTIC_UUID)
+        finally:
+            if client.is_connected:
+                await client.disconnect()
 
         with self.lock:
             if self.status != "failed":
@@ -170,6 +187,7 @@ async def _scan_devices(scanner, timeout=8):
         return_adv=True,
     )
     payload = []
+    device_cache = {}
     for item in discovered.values():
         if isinstance(item, tuple):
             device, advertisement = item
@@ -187,18 +205,125 @@ async def _scan_devices(scanner, timeout=8):
         address = device.address
         matches_target = _matches_target_device(name, service_uuids)
         if matches_target:
+            address_type = _advertisement_address_type(advertisement)
             payload.append(
                 {
                     "name": name,
                     "address": address,
+                    "address_type": address_type,
                     "rssi": getattr(device, "rssi", None),
                     "service_uuids": service_uuids,
                     "likely_esp32": True,
                 }
             )
+            device_cache[_normalize_address(address)] = {
+                "device": device,
+                "address_type": address_type,
+            }
 
     payload.sort(key=lambda item: item["name"].lower())
-    return payload
+    return payload, device_cache
+
+
+async def _connect_ble_client(bleak, connect_target, address, address_type):
+    last_error = None
+    for target, target_address_type in _connection_attempts(connect_target, address, address_type):
+        client = bleak.BleakClient(
+            target,
+            services=[BLE_SERVICE_UUID],
+            timeout=12,
+            winrt=_winrt_client_args(target_address_type),
+        )
+        try:
+            await client.connect()
+            return client
+        except Exception as exc:
+            last_error = exc
+            if getattr(client, "is_connected", False):
+                await client.disconnect()
+            if not _should_retry_connection(exc):
+                raise
+    raise last_error
+
+
+def _connection_attempts(connect_target, address, address_type):
+    attempts = []
+    candidates = [address_type]
+    if address_type:
+        candidates.append("random" if address_type == "public" else "public")
+    candidates.append(None)
+
+    for target in (connect_target, address):
+        for candidate in candidates:
+            key = (id(target), candidate)
+            if target and key not in attempts:
+                attempts.append(key)
+                yield target, candidate
+
+
+def _winrt_client_args(address_type):
+    args = {"use_cached_services": False}
+    if address_type in ("public", "random"):
+        args["address_type"] = address_type
+    return args
+
+
+def _should_retry_connection(error):
+    return (
+        error.__class__.__name__ == "BleakDeviceNotFoundError"
+        or "was not found" in str(error).lower()
+    )
+
+
+def _advertisement_address_type(advertisement):
+    platform_data = getattr(advertisement, "platform_data", None) or []
+    for item in platform_data:
+        for event_args in _advertisement_events(item):
+            address_type = _normalize_address_type(
+                getattr(event_args, "bluetooth_address_type", None)
+            )
+            if address_type:
+                return address_type
+    return None
+
+
+def _advertisement_events(item):
+    if item is None:
+        return []
+    if hasattr(item, "bluetooth_address_type"):
+        return [item]
+    return [
+        event_args
+        for event_args in (getattr(item, "adv", None), getattr(item, "scan", None))
+        if event_args is not None
+    ]
+
+
+def _normalize_address(address):
+    return str(address or "").strip().upper()
+
+
+def _normalize_address_type(address_type):
+    if address_type in (None, ""):
+        return None
+    name = getattr(address_type, "name", None)
+    if name:
+        value = name.lower()
+    else:
+        value = str(address_type).strip().lower()
+    if "public" in value:
+        return "public"
+    if "random" in value:
+        return "random"
+    try:
+        numeric = int(address_type)
+    except (TypeError, ValueError):
+        return None
+    if numeric == 0:
+        return "public"
+    if numeric == 1:
+        return "random"
+    return None
 
 
 def _matches_target_device(name, service_uuids):

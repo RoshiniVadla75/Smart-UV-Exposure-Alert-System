@@ -1,9 +1,10 @@
+import asyncio
 import tempfile
 
 import pytest
 
 from app import create_app
-from app.ble_gateway import parse_ble_packet
+from app.ble_gateway import BLE_SERVICE_UUID, _scan_devices, parse_ble_packet
 
 
 @pytest.fixture()
@@ -213,3 +214,79 @@ def test_ble_packet_accepts_smart_uv_json():
     assert payload["estimated_uv"] == 4.1
     assert payload["risk"] == "MODERATE"
     assert payload["buzzer"] is False
+
+
+def test_bluetooth_connect_forwards_address_type(client):
+    class FakeBleGateway:
+        def __init__(self):
+            self.call = None
+
+        def connect(self, address, name=None, address_type=None):
+            self.call = {
+                "address": address,
+                "name": name,
+                "address_type": address_type,
+            }
+            return {"status": "connecting"}
+
+    fake_gateway = FakeBleGateway()
+    client.application.extensions["ble_gateway"] = fake_gateway
+
+    response = client.post(
+        "/api/bluetooth/connect",
+        json={
+            "address": "D4:8A:FC:AE:3B:4A",
+            "name": "Smart-UV-ESP32",
+            "address_type": "random",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "connecting"
+    assert fake_gateway.call == {
+        "address": "D4:8A:FC:AE:3B:4A",
+        "name": "Smart-UV-ESP32",
+        "address_type": "random",
+    }
+
+
+def test_ble_scan_preserves_address_type_and_cached_device():
+    class FakeAddressType:
+        name = "RANDOM"
+
+    class FakeEvent:
+        bluetooth_address_type = FakeAddressType()
+
+    class FakeRawAdvertisement:
+        adv = FakeEvent()
+        scan = None
+
+    class FakeAdvertisement:
+        local_name = "Smart-UV-ESP32"
+        service_uuids = [BLE_SERVICE_UUID]
+        platform_data = (object(), FakeRawAdvertisement())
+
+    class FakeDevice:
+        address = "D4:8A:FC:AE:3B:4A"
+        name = None
+        rssi = -62
+
+    class FakeScanner:
+        @classmethod
+        async def discover(cls, **kwargs):
+            return {"D4:8A:FC:AE:3B:4A": (FakeDevice(), FakeAdvertisement())}
+
+    devices, cache = asyncio.run(_scan_devices(FakeScanner, timeout=1))
+
+    assert devices == [
+        {
+            "name": "Smart-UV-ESP32",
+            "address": "D4:8A:FC:AE:3B:4A",
+            "address_type": "random",
+            "rssi": -62,
+            "service_uuids": [BLE_SERVICE_UUID],
+            "likely_esp32": True,
+        }
+    ]
+    assert cache["D4:8A:FC:AE:3B:4A"]["device"].address == "D4:8A:FC:AE:3B:4A"
+    assert cache["D4:8A:FC:AE:3B:4A"]["address_type"] == "random"

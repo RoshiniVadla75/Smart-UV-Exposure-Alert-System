@@ -339,6 +339,7 @@ async function connectServerBluetooth(device) {
     await postJson("/api/bluetooth/connect", {
       address: device.address,
       name: device.name,
+      address_type: device.address_type,
     });
     pollServerBluetoothStatus();
   } catch (error) {

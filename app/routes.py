@@ -329,6 +329,7 @@ def register_routes(app):
             status = current_app.extensions["ble_gateway"].connect(
                 address,
                 name=payload.get("name"),
+                address_type=payload.get("address_type"),
             )
         except RuntimeError as err:
             return jsonify({"error": str(err)}), 503
