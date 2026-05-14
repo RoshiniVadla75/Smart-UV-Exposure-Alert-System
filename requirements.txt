@@ -2,3 +2,5 @@ Flask
 pytest
 gunicorn
 pandas
+cryptography
+bleak

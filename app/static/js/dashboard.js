@@ -2,6 +2,7 @@ let uvTrendChart = null;
 let bleDevice = null;
 let bleCharacteristic = null;
 let blePacketBuffer = "";
+let serverBleStatusTimer = null;
 
 const BLE_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 const BLE_NOTIFY_CHARACTERISTIC_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
@@ -230,15 +231,145 @@ function explainBluetoothAvailability() {
   if (!window.isSecureContext && !isLocalHost()) {
     const origin = window.location.origin;
     return [
-      "Bluetooth is blocked because this page is not opened from a secure origin.",
-      "Open http://localhost:5000 on this same computer, or use HTTPS for the 192.168.x.x address.",
-      `For quick testing in Chrome, add ${origin} under chrome://flags/#unsafely-treat-insecure-origin-as-secure and relaunch Chrome.`,
+      `Bluetooth scanning is blocked on ${origin}.`,
+      "Chrome only allows Web Bluetooth on secure pages.",
+      "If this browser is on the same computer as Flask, open http://localhost:5000 instead.",
+      "If this browser is on another device, restart Flask with FLASK_HTTPS=true and open the logged https://192.168.x.x URL.",
+      `For quick Chrome testing only, add ${origin} under chrome://flags/#unsafely-treat-insecure-origin-as-secure and relaunch Chrome.`,
     ].join("\n");
   }
   if (!navigator.bluetooth) {
     return "Web Bluetooth is not available here. Use desktop Chrome or Edge, enable Bluetooth in Windows, and avoid Incognito/private windows.";
   }
   return "";
+}
+
+function showBlePanel(message) {
+  const panel = document.getElementById("blePanel");
+  const panelMessage = document.getElementById("blePanelMessage");
+  const list = document.getElementById("bleDeviceList");
+  if (panel) panel.classList.remove("hidden");
+  if (panelMessage) panelMessage.textContent = message;
+  if (list) list.replaceChildren();
+}
+
+function setBlePanelMessage(message) {
+  text("blePanelMessage", message);
+}
+
+function closeBlePanel() {
+  const panel = document.getElementById("blePanel");
+  if (panel) panel.classList.add("hidden");
+}
+
+async function postJson(path, payload = {}) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(result.error || `Request failed for ${path}`);
+  }
+  return result;
+}
+
+function renderServerBleDevices(devices) {
+  const list = document.getElementById("bleDeviceList");
+  if (!list) return;
+  list.replaceChildren();
+
+  if (!devices.length) {
+    setBlePanelMessage("No BLE devices found nearby. Check that the ESP32 is powered on and advertising BLE.");
+    return;
+  }
+
+  setBlePanelMessage(`${devices.length} BLE device${devices.length === 1 ? "" : "s"} found nearby.`);
+  devices.forEach((device) => {
+    const row = document.createElement("article");
+    row.className = "ble-device-row";
+
+    const details = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = device.name || "Unnamed BLE device";
+    const meta = document.createElement("span");
+    const rssi = device.rssi === null || device.rssi === undefined ? "signal unknown" : `${device.rssi} dBm`;
+    const serviceNote = Array.isArray(device.service_uuids) && device.service_uuids.includes(BLE_SERVICE_UUID)
+      ? " - Nordic UART"
+      : "";
+    meta.textContent = `${device.address} - ${rssi}${serviceNote}`;
+    details.append(name, meta);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = device.likely_esp32 ? "Connect" : "Try";
+    button.addEventListener("click", () => connectServerBluetooth(device));
+
+    row.append(details, button);
+    list.append(row);
+  });
+}
+
+async function scanServerBluetooth(reason) {
+  updateBluetoothStatus("Scanning");
+  showBlePanel("Searching nearby BLE devices...");
+  if (reason) {
+    console.info(reason);
+  }
+
+  try {
+    const result = await postJson("/api/bluetooth/scan?timeout=8");
+    renderServerBleDevices(result.devices || []);
+  } catch (error) {
+    console.error("Server Bluetooth scan failed:", error);
+    updateBluetoothStatus("Disconnected");
+    setBlePanelMessage(error.message);
+  }
+}
+
+async function connectServerBluetooth(device) {
+  updateBluetoothStatus("Connecting");
+  setBlePanelMessage(`Connecting to ${device.name || device.address}...`);
+
+  try {
+    await postJson("/api/bluetooth/connect", {
+      address: device.address,
+      name: device.name,
+    });
+    pollServerBluetoothStatus();
+  } catch (error) {
+    console.error("Server Bluetooth connect failed:", error);
+    updateBluetoothStatus("Disconnected");
+    setBlePanelMessage(error.message);
+  }
+}
+
+function pollServerBluetoothStatus() {
+  if (serverBleStatusTimer) clearInterval(serverBleStatusTimer);
+  serverBleStatusTimer = setInterval(refreshServerBluetoothStatus, 1600);
+  refreshServerBluetoothStatus();
+}
+
+async function refreshServerBluetoothStatus() {
+  try {
+    const status = await getJson("/api/bluetooth/status");
+    if (status.status === "connected") {
+      updateBluetoothStatus("Connected");
+      setBlePanelMessage(`Connected to ${status.device_name || "BLE device"}. Waiting for sensor packets...`);
+      if (serverBleStatusTimer) clearInterval(serverBleStatusTimer);
+      serverBleStatusTimer = null;
+    } else if (status.status === "failed") {
+      updateBluetoothStatus("Disconnected");
+      setBlePanelMessage(status.error || "Bluetooth connection failed.");
+      if (serverBleStatusTimer) clearInterval(serverBleStatusTimer);
+      serverBleStatusTimer = null;
+    } else {
+      updateBluetoothStatus(titleCase(status.status || "Connecting"));
+    }
+  } catch (error) {
+    console.warn("Unable to read server Bluetooth status:", error);
+  }
 }
 
 function parseBlePacket(packet) {
@@ -337,7 +468,7 @@ async function connectBluetooth() {
 
   const availabilityMessage = explainBluetoothAvailability();
   if (availabilityMessage) {
-    alert(availabilityMessage);
+    await scanServerBluetooth(availabilityMessage);
     return;
   }
 
@@ -365,6 +496,10 @@ async function connectBluetooth() {
   } catch (error) {
     console.error("Bluetooth error:", error);
     updateBluetoothStatus("Disconnected");
+    if (error.name === "SecurityError") {
+      await scanServerBluetooth(error.message);
+      return;
+    }
     const message =
       error.name === "NotFoundError"
         ? "Bluetooth pairing was cancelled. Click Connect Bluetooth again and choose your ESP32 device from the Chrome Bluetooth window."
@@ -692,9 +827,13 @@ async function loadDashboard() {
 
 document.addEventListener("DOMContentLoaded", () => {
   const btn = document.getElementById("connectBluetoothBtn");
+  const closeBtn = document.getElementById("bleCloseBtn");
 
   if (btn) {
     btn.addEventListener("click", connectBluetooth);
+  }
+  if (closeBtn) {
+    closeBtn.addEventListener("click", closeBlePanel);
   }
 
   loadDashboard().catch((error) => {

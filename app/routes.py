@@ -307,6 +307,47 @@ def register_routes(app):
     def device_status():
         return jsonify(_device_status_payload(get_db()))
 
+    @app.post("/api/bluetooth/scan")
+    def bluetooth_scan():
+        timeout = request.args.get("timeout", default=8, type=float)
+        try:
+            devices = current_app.extensions["ble_gateway"].scan(timeout=timeout)
+        except RuntimeError as err:
+            return jsonify({"error": str(err), "devices": []}), 503
+        except Exception as err:
+            current_app.logger.exception("Bluetooth scan failed: %s", err)
+            return jsonify({"error": f"Bluetooth scan failed: {err}", "devices": []}), 500
+        return jsonify({"devices": devices, "count": len(devices)})
+
+    @app.post("/api/bluetooth/connect")
+    def bluetooth_connect():
+        payload = request.get_json(silent=True) or {}
+        address = payload.get("address")
+        if not address:
+            return jsonify({"error": "address is required."}), 400
+        try:
+            status = current_app.extensions["ble_gateway"].connect(
+                address,
+                name=payload.get("name"),
+            )
+        except RuntimeError as err:
+            return jsonify({"error": str(err)}), 503
+        except ValueError as err:
+            return jsonify({"error": str(err)}), 400
+        except Exception as err:
+            current_app.logger.exception("Bluetooth connect failed: %s", err)
+            return jsonify({"error": f"Bluetooth connect failed: {err}"}), 500
+        return jsonify(status)
+
+    @app.post("/api/bluetooth/disconnect")
+    def bluetooth_disconnect():
+        current_app.extensions["ble_gateway"].disconnect()
+        return jsonify(current_app.extensions["ble_gateway"].snapshot())
+
+    @app.get("/api/bluetooth/status")
+    def bluetooth_status():
+        return jsonify(current_app.extensions["ble_gateway"].snapshot())
+
     @app.get("/api/export/readings.csv")
     def export_readings_csv():
         rows = get_db().execute(

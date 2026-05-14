@@ -29,6 +29,20 @@
   </div>
 </section>
 
+<section class="ble-panel hidden" id="blePanel" role="dialog" aria-modal="true" aria-labelledby="blePanelTitle">
+  <div class="ble-panel-card">
+    <header>
+      <div>
+        <p class="eyebrow">Bluetooth</p>
+        <h2 id="blePanelTitle">Nearby BLE devices</h2>
+      </div>
+      <button class="ble-close-button" id="bleCloseBtn" type="button" aria-label="Close Bluetooth panel">x</button>
+    </header>
+    <p id="blePanelMessage">Scanning...</p>
+    <div class="ble-device-list" id="bleDeviceList"></div>
+  </div>
+</section>
+
 <section class="hero-grid">
   <article class="hero-weather-card hero-sunny" id="heroPanel">
     <div class="hero-overlay"></div>

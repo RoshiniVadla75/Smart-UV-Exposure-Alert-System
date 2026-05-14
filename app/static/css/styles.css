@@ -45,6 +45,10 @@ body.sidebar-open {
   overflow: hidden;
 }
 
+.hidden {
+  display: none !important;
+}
+
 button,
 input,
 select {
@@ -354,6 +358,94 @@ select {
 
 #connectBluetoothBtn:hover {
   background: rgba(53, 139, 255, 0.34);
+}
+
+.ble-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: rgba(2, 8, 14, 0.64);
+  backdrop-filter: blur(8px);
+}
+
+.ble-panel-card {
+  width: min(620px, 100%);
+  max-height: min(680px, 88vh);
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(18, 39, 62, 0.98), rgba(7, 20, 34, 0.98));
+  box-shadow: var(--shadow);
+}
+
+.ble-panel-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.ble-panel-card h2,
+.ble-panel-card p {
+  margin: 0;
+}
+
+.ble-panel-card > p {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.ble-close-button {
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+
+.ble-device-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.ble-device-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(10, 26, 42, 0.76);
+}
+
+.ble-device-row strong,
+.ble-device-row span {
+  display: block;
+}
+
+.ble-device-row span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ble-device-row button {
+  min-height: 38px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  color: var(--text);
+  background: rgba(85, 216, 255, 0.18);
+  cursor: pointer;
 }
 
 .hero-grid {

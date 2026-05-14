@@ -3,6 +3,7 @@ import time
 from flask import Flask
 from flask import jsonify, request
 
+from .ble_gateway import BleGateway
 from .db import init_db
 from .demo import DemoEngine
 from .db import get_db
@@ -32,6 +33,7 @@ def create_app(test_config=None):
 
     init_db(app)
     app.extensions["rate_limit_state"] = {}
+    app.extensions["ble_gateway"] = BleGateway(app)
     app.extensions["demo_engine"] = DemoEngine(
         app, interval_seconds=app.config["DEMO_INTERVAL_SECONDS"]
     )

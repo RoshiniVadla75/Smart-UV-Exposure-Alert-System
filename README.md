@@ -94,6 +94,9 @@ Create a local `.env` file from `.env.example` and set values:
 ```env
 PORT=5000
 FLASK_DEBUG=false
+FLASK_HTTPS=false
+SSL_CERT_FILE=
+SSL_KEY_FILE=
 INGEST_API_KEY=change-this-secret-key
 DEMO_INTERVAL_SECONDS=5
 RATE_LIMIT_WINDOW_SECONDS=60
@@ -112,6 +115,22 @@ python run.py
 ```
 
 Open `http://localhost:5000/`.
+
+Web Bluetooth works from `http://localhost:5000` on the same computer. If you open the app from another computer or phone using a `192.168.x.x` address, Chrome blocks Bluetooth on plain HTTP. For LAN testing, enable HTTPS:
+
+```bash
+export FLASK_HTTPS=true
+python run.py
+```
+
+On PowerShell:
+
+```powershell
+$env:FLASK_HTTPS="true"
+python run.py
+```
+
+Then open the logged `https://192.168.x.x:5000/` LAN URL. A classroom/dev self-signed certificate can still require a browser exception or a trusted local certificate; for quick Chrome testing you can also add the current origin in `chrome://flags/#unsafely-treat-insecure-origin-as-secure`.
 
 ## Bluetooth Hardware Setup
 
@@ -143,6 +162,14 @@ light-sensor-01,850.5,-62
 ```
 
 Open the dashboard in Chrome or Edge on `localhost`, enter the ingest key if `INGEST_API_KEY` is configured, and press `Connect Bluetooth`. Web Bluetooth requires a secure context, and `localhost` is accepted for local development.
+
+If you need to browse to the dashboard from a different device, do not use `http://192.168.x.x:5000` for Bluetooth. Use one of these instead:
+
+- Start Flask with `FLASK_HTTPS=true` and open `https://192.168.x.x:5000`.
+- Use a trusted certificate by setting `SSL_CERT_FILE` and `SSL_KEY_FILE`.
+- For temporary Chrome-only testing, add the exact `http://192.168.x.x:5000` origin to `chrome://flags/#unsafely-treat-insecure-origin-as-secure`, relaunch Chrome, then reconnect.
+
+The dashboard also includes a server-side BLE fallback. If Chrome blocks the native Web Bluetooth picker on an HTTP LAN URL, `Connect Bluetooth` asks Flask to scan nearby BLE devices with Python instead and shows the results inside the dashboard. This requires the `bleak` package from `requirements.txt` and uses the Bluetooth adapter on the computer running Flask.
 
 ## API Hardware Payload
 
