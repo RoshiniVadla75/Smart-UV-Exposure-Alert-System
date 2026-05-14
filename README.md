@@ -142,15 +142,15 @@ Recommended BLE profile:
 
 | Item | Value |
 | --- | --- |
-| Device name prefix | `VEML`, `Light`, or `ESP32` |
-| Service | Nordic UART Service |
-| Service UUID | `6e400001-b5a3-f393-e0a9-e50e24dcca9e` |
-| Notify characteristic | `6e400003-b5a3-f393-e0a9-e50e24dcca9e` |
+| Device name | `Smart-UV-ESP32` |
+| Service | Smart UV BLE service |
+| Service UUID | `12345678-1234-1234-1234-123456789abc` |
+| Notify characteristic | `abcdefab-1234-5678-1234-abcdefabcdef` |
 
 The ESP32 should notify one newline-delimited packet every few seconds. Supported packet formats:
 
 ```json
-{"device_id":"light-sensor-01","lux":850.5,"wifi_signal":-62}
+{"lux":12450.0,"estimated_uv":4.1,"risk":"MODERATE","buzzer":false}
 ```
 
 ```text

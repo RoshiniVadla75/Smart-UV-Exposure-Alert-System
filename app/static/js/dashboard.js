@@ -4,8 +4,9 @@ let bleCharacteristic = null;
 let blePacketBuffer = "";
 let serverBleStatusTimer = null;
 
-const BLE_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-const BLE_NOTIFY_CHARACTERISTIC_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+const BLE_DEVICE_NAME = "Smart-UV-ESP32";
+const BLE_SERVICE_UUID = "12345678-1234-1234-1234-123456789abc";
+const BLE_NOTIFY_CHARACTERISTIC_UUID = "abcdefab-1234-5678-1234-abcdefabcdef";
 const BLE_DECODER = new TextDecoder("utf-8");
 
 const DASHBOARD_DEFAULTS = {
@@ -281,11 +282,13 @@ function renderServerBleDevices(devices) {
   list.replaceChildren();
 
   if (!devices.length) {
-    setBlePanelMessage("No BLE devices found nearby. Check that the ESP32 is powered on and advertising BLE.");
+    setBlePanelMessage(
+      `No ${BLE_DEVICE_NAME} device found. Check that the ESP32 is powered on and advertising its name or service UUID.`
+    );
     return;
   }
 
-  setBlePanelMessage(`${devices.length} BLE device${devices.length === 1 ? "" : "s"} found nearby.`);
+  setBlePanelMessage(`${devices.length} ${BLE_DEVICE_NAME} device${devices.length === 1 ? "" : "s"} found nearby.`);
   devices.forEach((device) => {
     const row = document.createElement("article");
     row.className = "ble-device-row";
@@ -296,7 +299,7 @@ function renderServerBleDevices(devices) {
     const meta = document.createElement("span");
     const rssi = device.rssi === null || device.rssi === undefined ? "signal unknown" : `${device.rssi} dBm`;
     const serviceNote = Array.isArray(device.service_uuids) && device.service_uuids.includes(BLE_SERVICE_UUID)
-      ? " - Nordic UART"
+      ? " - Smart UV service"
       : "";
     meta.textContent = `${device.address} - ${rssi}${serviceNote}`;
     details.append(name, meta);
@@ -356,9 +359,12 @@ async function refreshServerBluetoothStatus() {
     const status = await getJson("/api/bluetooth/status");
     if (status.status === "connected") {
       updateBluetoothStatus("Connected");
-      setBlePanelMessage(`Connected to ${status.device_name || "BLE device"}. Waiting for sensor packets...`);
-      if (serverBleStatusTimer) clearInterval(serverBleStatusTimer);
-      serverBleStatusTimer = null;
+      if (status.latest_payload) {
+        updateDashboardFromBLE(status.latest_payload);
+        setBlePanelMessage(`Connected to ${status.device_name || BLE_DEVICE_NAME}. Receiving sensor packets.`);
+      } else {
+        setBlePanelMessage(`Connected to ${status.device_name || BLE_DEVICE_NAME}. Waiting for sensor packets...`);
+      }
     } else if (status.status === "failed") {
       updateBluetoothStatus("Disconnected");
       setBlePanelMessage(status.error || "Bluetooth connection failed.");
@@ -387,7 +393,7 @@ function parseBlePacket(packet) {
   } else {
     const parts = rawPacket.split(",").map((part) => part.trim());
     if (parts.length === 1) {
-      parsed = { device_id: bleDevice?.name || "ESP32-VEML6030", lux: parts[0] };
+      parsed = { device_id: bleDevice?.name || BLE_DEVICE_NAME, lux: parts[0] };
     } else {
       const [deviceId, lux, wifiSignal] = parts;
       parsed = { device_id: deviceId, lux, wifi_signal: wifiSignal };
@@ -398,8 +404,11 @@ function parseBlePacket(packet) {
   if (lux === null) throw new Error(`BLE packet did not include a numeric lux value: ${rawPacket}`);
 
   return {
-    device_id: parsed.device_id || parsed.device || bleDevice?.name || "ESP32-VEML6030",
+    device_id: parsed.device_id || parsed.device || bleDevice?.name || BLE_DEVICE_NAME,
     lux,
+    estimated_uv: numberOrNull(parsed.estimated_uv),
+    risk: parsed.risk || null,
+    buzzer: parsed.buzzer ?? null,
     wifi_signal: parsed.wifi_signal ?? parsed.rssi ?? null,
     esp32_uptime_seconds: parsed.esp32_uptime_seconds ?? parsed.uptime ?? null,
     raw_packet: rawPacket,
@@ -427,7 +436,7 @@ async function postBleStatus(status, extra = {}) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      device_id: bleDevice?.name || "ESP32-VEML6030",
+      device_id: bleDevice?.name || BLE_DEVICE_NAME,
       ble_status: status,
       signal_active: status === "connected",
       ...extra,
@@ -439,11 +448,27 @@ async function handleBlePacket(packet) {
   const reading = parseBlePacket(packet);
   if (!reading) return;
   const savedReading = await postBleReading(reading);
-  updateDashboardFromBLE(savedReading);
+  updateDashboardFromBLE({
+    ...savedReading,
+    estimated_uv: reading.estimated_uv ?? savedReading.estimated_uv,
+    risk: reading.risk || savedReading.risk,
+    buzzer: reading.buzzer ?? savedReading.buzzer,
+  });
 }
 
 function handleBleNotification(event) {
   blePacketBuffer += BLE_DECODER.decode(event.target.value);
+  const trimmedPacket = blePacketBuffer.trim();
+
+  if (trimmedPacket.startsWith("{") && trimmedPacket.endsWith("}")) {
+    blePacketBuffer = "";
+    handleBlePacket(trimmedPacket).catch((error) => {
+      console.error("BLE packet error:", error);
+      alert(error.message);
+    });
+    return;
+  }
+
   const packets = blePacketBuffer.split(/\r?\n/);
   blePacketBuffer = packets.pop() || "";
 
@@ -475,7 +500,10 @@ async function connectBluetooth() {
   try {
     updateBluetoothStatus("Pairing");
     const device = await navigator.bluetooth.requestDevice({
-      acceptAllDevices: true,
+      filters: [
+        { name: BLE_DEVICE_NAME },
+        { services: [BLE_SERVICE_UUID] },
+      ],
       optionalServices: [BLE_SERVICE_UUID],
     });
 

@@ -3,6 +3,7 @@ import tempfile
 import pytest
 
 from app import create_app
+from app.ble_gateway import parse_ble_packet
 
 
 @pytest.fixture()
@@ -201,3 +202,14 @@ def test_reading_accepts_location_metadata(client):
     assert latest["location_label"] == "Perth hardware field test"
     assert latest["latitude"] == -31.9523
     assert latest["longitude"] == 115.8613
+
+
+def test_ble_packet_accepts_smart_uv_json():
+    payload = parse_ble_packet(
+        '{"lux":12450.0,"estimated_uv":4.1,"risk":"MODERATE","buzzer":false}'
+    )
+    assert payload["device_id"] == "Smart-UV-ESP32"
+    assert payload["lux"] == 12450.0
+    assert payload["estimated_uv"] == 4.1
+    assert payload["risk"] == "MODERATE"
+    assert payload["buzzer"] is False

@@ -6,9 +6,9 @@ from .db import get_db
 from .services import now_iso, persist_reading, update_device_status
 
 
-BLE_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
-BLE_NOTIFY_CHARACTERISTIC_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
-BLE_NAME_HINTS = ("esp32", "veml", "light", "uv")
+BLE_DEVICE_NAME = "Smart-UV-ESP32"
+BLE_SERVICE_UUID = "12345678-1234-1234-1234-123456789abc"
+BLE_NOTIFY_CHARACTERISTIC_UUID = "abcdefab-1234-5678-1234-abcdefabcdef"
 
 
 class BleGateway:
@@ -18,8 +18,9 @@ class BleGateway:
         self.stop_event = threading.Event()
         self.thread = None
         self.client = None
-        self.device_name = "ESP32-VEML6030"
+        self.device_name = BLE_DEVICE_NAME
         self.device_address = None
+        self.latest_payload = None
         self.packet_buffer = ""
         self.status = "disconnected"
         self.error = None
@@ -73,6 +74,7 @@ class BleGateway:
                 "device_address": self.device_address,
                 "error": self.error,
                 "connected": self.status == "connected",
+                "latest_payload": self.latest_payload,
             }
 
     def _thread_main(self, address):
@@ -112,6 +114,12 @@ class BleGateway:
 
     def _handle_notification(self, data):
         self.packet_buffer += bytes(data).decode("utf-8", errors="replace")
+        trimmed_packet = self.packet_buffer.strip()
+        if trimmed_packet.startswith("{") and trimmed_packet.endswith("}"):
+            self.packet_buffer = ""
+            self._persist_packet(trimmed_packet)
+            return
+
         packets = self.packet_buffer.splitlines(keepends=True)
         if packets and not packets[-1].endswith(("\n", "\r")):
             self.packet_buffer = packets.pop()
@@ -125,6 +133,8 @@ class BleGateway:
 
     def _persist_packet(self, packet):
         payload = parse_ble_packet(packet, self.device_name)
+        with self.lock:
+            self.latest_payload = payload
         with self.app.app_context():
             persist_reading(get_db(), payload)
 
@@ -175,26 +185,27 @@ async def _scan_devices(scanner, timeout=8):
             for uuid in (getattr(advertisement, "service_uuids", None) or [])
         ]
         address = device.address
-        payload.append(
-            {
-                "name": name,
-                "address": address,
-                "rssi": getattr(device, "rssi", None),
-                "service_uuids": service_uuids,
-                "likely_esp32": _looks_like_sensor(name) or BLE_SERVICE_UUID in service_uuids,
-            }
-        )
+        matches_target = _matches_target_device(name, service_uuids)
+        if matches_target:
+            payload.append(
+                {
+                    "name": name,
+                    "address": address,
+                    "rssi": getattr(device, "rssi", None),
+                    "service_uuids": service_uuids,
+                    "likely_esp32": True,
+                }
+            )
 
-    payload.sort(key=lambda item: (not item["likely_esp32"], item["name"].lower()))
+    payload.sort(key=lambda item: item["name"].lower())
     return payload
 
 
-def _looks_like_sensor(name):
-    value = str(name or "").lower()
-    return any(hint in value for hint in BLE_NAME_HINTS)
+def _matches_target_device(name, service_uuids):
+    return str(name or "").strip() == BLE_DEVICE_NAME or BLE_SERVICE_UUID in service_uuids
 
 
-def parse_ble_packet(packet, fallback_device_name="ESP32-VEML6030"):
+def parse_ble_packet(packet, fallback_device_name=BLE_DEVICE_NAME):
     raw_packet = str(packet or "").strip()
     if not raw_packet:
         raise ValueError("BLE packet was empty.")
@@ -226,6 +237,9 @@ def parse_ble_packet(packet, fallback_device_name="ESP32-VEML6030"):
     return {
         "device_id": parsed.get("device_id") or parsed.get("device") or fallback_device_name,
         "lux": lux,
+        "estimated_uv": _optional_float(parsed.get("estimated_uv")),
+        "risk": parsed.get("risk"),
+        "buzzer": parsed.get("buzzer"),
         "wifi_signal": parsed.get("wifi_signal") or parsed.get("rssi"),
         "esp32_uptime_seconds": parsed.get("esp32_uptime_seconds") or parsed.get("uptime"),
         "raw_packet": raw_packet,
@@ -234,3 +248,9 @@ def parse_ble_packet(packet, fallback_device_name="ESP32-VEML6030"):
         "signal_active": True,
         "timestamp": now_iso(),
     }
+
+
+def _optional_float(value):
+    if value in (None, ""):
+        return None
+    return float(value)
